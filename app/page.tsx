@@ -7,9 +7,11 @@ import {
   loadProjectLibrary,
   parseProjectBackup,
   saveProjectLibrary,
+  validateProjectDraft,
   type LocalProjectDraft,
   type ProjectLibrary,
 } from "@/lib/projects";
+import type { CloudProject } from "@/lib/cloud-projects";
 import {
   FRAMING_OPTIONS,
   SAMPLE_SCRIPT,
@@ -35,6 +37,67 @@ function initialLibrary(): ProjectLibrary {
   return { version: 1, activeProjectId: project.id, projects: [project] };
 }
 
+type SessionUser = {
+  userId: string;
+  displayName: string;
+  email: string;
+};
+
+type SessionState =
+  | { status: "loading"; user: null; signInPath: string; signOutPath: string }
+  | { status: "anonymous"; user: null; signInPath: string; signOutPath: string }
+  | { status: "authenticated"; user: SessionUser; signInPath: string; signOutPath: string };
+
+type CloudIssue = "failed" | "conflict" | null;
+
+const LOCAL_MIGRATION_KEY_PREFIX = "zhenyu.cloud-migrated.v1.";
+
+function projectPayload(project: LocalProjectDraft) {
+  return { name: project.name, script: project.script, storyboard: project.storyboard };
+}
+
+function cloudProjectToDraft(project: CloudProject): LocalProjectDraft {
+  return {
+    id: project.id,
+    name: project.name,
+    script: project.script,
+    storyboard: project.storyboard,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  };
+}
+
+function validatedCloudProject(value: unknown): CloudProject | null {
+  if (!value || typeof value !== "object") return null;
+  const version = (value as { version?: unknown }).version;
+  const validation = validateProjectDraft(value);
+  if (!validation.ok || !Number.isInteger(version) || Number(version) < 1) return null;
+  return { ...validation.value, version: Number(version) };
+}
+
+function migratedLocalIds(storage: Storage, userId: string) {
+  try {
+    const value: unknown = JSON.parse(storage.getItem(`${LOCAL_MIGRATION_KEY_PREFIX}${userId}`) ?? "[]");
+    return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === "string") : []);
+  } catch {
+    return new Set<string>();
+  }
+}
+
+function rememberMigratedLocalId(storage: Storage, userId: string, id: string) {
+  try {
+    const ids = migratedLocalIds(storage, userId);
+    ids.add(id);
+    storage.setItem(`${LOCAL_MIGRATION_KEY_PREFIX}${userId}`, JSON.stringify([...ids]));
+  } catch {
+    // The migration itself remains valid even when this optional local marker fails.
+  }
+}
+
+async function responsePayload(response: Response) {
+  return response.json().catch(() => null) as Promise<unknown>;
+}
+
 function safeFilename(value: string) {
   return value.trim().replace(/[\\/:*?"<>|]/g, "-") || "帧语项目";
 }
@@ -54,12 +117,26 @@ function downloadText(filename: string, text: string, type: string) {
 export default function Home() {
   const [library, setLibrary] = useState<ProjectLibrary | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [session, setSession] = useState<SessionState>({
+    status: "loading",
+    user: null,
+    signInPath: "/signin-with-chatgpt?return_to=%2F",
+    signOutPath: "/signout-with-chatgpt?return_to=%2F",
+  });
+  const [localMigrationProjects, setLocalMigrationProjects] = useState<LocalProjectDraft[]>([]);
+  const [cloudVersions, setCloudVersions] = useState<Record<string, number>>({});
+  const [cloudIssue, setCloudIssue] = useState<CloudIssue>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+  const [isMigrating, setIsMigrating] = useState(false);
   const [notice, setNotice] = useState("");
   const [isError, setIsError] = useState(false);
-  const [saveStatus, setSaveStatus] = useState("正在读取本地项目…");
+  const [saveStatus, setSaveStatus] = useState("正在确认登录状态…");
   const [isGenerating, setIsGenerating] = useState(false);
   const [hasExported, setHasExported] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const editRevisionRef = useRef<Record<string, number>>({});
+  const saveBlockedRef = useRef(false);
+  const saveInFlightRef = useRef(false);
 
   const activeProject = useMemo(() => {
     return library?.projects.find((project) => project.id === library.activeProjectId) ?? null;
@@ -68,35 +145,171 @@ export default function Home() {
   const script = activeProject?.script ?? "";
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      let localLibrary: ProjectLibrary | null = null;
+      let signedInUser: SessionUser | null = null;
       try {
         const restored = loadProjectLibrary(window.localStorage);
         if (!restored.ok) {
-          setLibrary(initialLibrary());
-          setSaveStatus("本地草稿无法恢复，已新建空白项目");
           setNotice(restored.error);
           setIsError(true);
-        } else if (!restored.value) {
-          setLibrary(initialLibrary());
-          setSaveStatus("已建立本地项目库");
         } else {
-          setLibrary(restored.value);
-          setSaveStatus("已恢复本地草稿");
+          localLibrary = restored.value;
         }
-      } catch {
-        setLibrary(initialLibrary());
-        setSaveStatus("本地草稿无法读取，已新建空白项目");
-        setNotice("读取本地草稿失败，请检查浏览器存储权限。");
+
+        const sessionResponse = await fetch("/api/session", { signal: controller.signal });
+        const sessionPayload = await responsePayload(sessionResponse) as {
+          user?: SessionUser | null;
+          signInPath?: string;
+          signOutPath?: string;
+        } | null;
+        if (!sessionResponse.ok || !sessionPayload) throw new Error("session");
+
+        const signInPath = typeof sessionPayload.signInPath === "string"
+          ? sessionPayload.signInPath
+          : "/signin-with-chatgpt?return_to=%2F";
+        const signOutPath = typeof sessionPayload.signOutPath === "string"
+          ? sessionPayload.signOutPath
+          : "/signout-with-chatgpt?return_to=%2F";
+
+        if (!sessionPayload.user) {
+          setSession({ status: "anonymous", user: null, signInPath, signOutPath });
+          setLibrary(localLibrary ?? initialLibrary());
+          setSaveStatus(localLibrary ? "已恢复本地草稿" : "已建立本地项目库");
+          return;
+        }
+
+        const user = sessionPayload.user;
+        signedInUser = user;
+        setSession({ status: "authenticated", user, signInPath, signOutPath });
+        if (localLibrary) {
+          const migrated = migratedLocalIds(window.localStorage, user.userId);
+          setLocalMigrationProjects(localLibrary.projects.filter((project) => !migrated.has(project.id)));
+        }
+
+        const projectsResponse = await fetch("/api/projects", { signal: controller.signal });
+        const projectsPayload = await responsePayload(projectsResponse) as { projects?: unknown[] } | null;
+        if (!projectsResponse.ok || !projectsPayload || !Array.isArray(projectsPayload.projects)) {
+          throw new Error(errorMessageFrom(projectsPayload));
+        }
+        const projects = projectsPayload.projects.map(validatedCloudProject);
+        if (projects.some((project) => !project)) throw new Error("云端项目数据校验失败。");
+        const cloudProjects = projects as CloudProject[];
+        setCloudVersions(Object.fromEntries(cloudProjects.map((project) => [project.id, project.version])));
+        setLibrary({
+          version: 1,
+          activeProjectId: cloudProjects[0]?.id ?? "",
+          projects: cloudProjects.map(cloudProjectToDraft),
+        });
+        setSaveStatus(cloudProjects.length ? "已从云端恢复项目" : "云端暂无项目，请新建或迁移本地项目");
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (signedInUser) {
+          setLibrary({ version: 1, activeProjectId: "", projects: [] });
+          setSession((current) => ({
+            status: "authenticated",
+            user: signedInUser!,
+            signInPath: current.signInPath,
+            signOutPath: current.signOutPath,
+          }));
+          setSaveStatus("云端项目加载失败，本地草稿未上传");
+        } else {
+          setLibrary(localLibrary ?? initialLibrary());
+          setSession((current) => ({ ...current, status: "anonymous", user: null }));
+          setSaveStatus("云端身份确认失败，正在使用当前浏览器草稿");
+        }
+        setNotice(error instanceof Error && error.message !== "session"
+          ? error.message
+          : "无法确认登录状态，暂时使用当前浏览器草稿。");
         setIsError(true);
       } finally {
-        setIsHydrated(true);
+        if (!controller.signal.aborted) setIsHydrated(true);
       }
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      controller.abort();
+      window.clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
     if (!isHydrated || !library) return;
+    if (session.status === "loading") return;
+
+    if (session.status === "authenticated") {
+      const dirtyProjectId = Object.keys(editRevisionRef.current)
+        .find((id) => library.projects.some((project) => project.id === id));
+      const project = library.projects.find((candidate) => candidate.id === dirtyProjectId);
+      if (!project || saveBlockedRef.current) return;
+      const version = cloudVersions[project.id];
+      if (!version) return;
+      const revision = editRevisionRef.current[project.id];
+      const controller = new AbortController();
+      let requestStarted = false;
+
+      const timer = window.setTimeout(async () => {
+        if (saveInFlightRef.current) return;
+        requestStarted = true;
+        saveInFlightRef.current = true;
+        setSaveStatus("正在保存到云端…");
+        try {
+          const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...projectPayload(project), version }),
+            signal: controller.signal,
+          });
+          const payload = await responsePayload(response) as { project?: unknown } | null;
+          if (!response.ok) {
+            saveBlockedRef.current = true;
+            setLibrary((current) => current ? { ...current, activeProjectId: project.id } : current);
+            if (response.status === 409) {
+              setCloudIssue("conflict");
+              setSaveStatus("存在版本冲突，当前编辑内容尚未覆盖云端");
+            } else {
+              setCloudIssue("failed");
+              setSaveStatus("保存失败，当前编辑内容仍保留");
+            }
+            setNotice(errorMessageFrom(payload));
+            setIsError(true);
+            return;
+          }
+
+          const savedProject = validatedCloudProject(payload?.project);
+          if (!savedProject) throw new Error("云端返回的项目数据无效。");
+          setCloudVersions((current) => ({ ...current, [project.id]: savedProject.version }));
+          if (editRevisionRef.current[project.id] === revision) {
+            delete editRevisionRef.current[project.id];
+            setLibrary((current) => current ? {
+              ...current,
+              projects: current.projects.map((candidate) => candidate.id === project.id
+                ? cloudProjectToDraft(savedProject)
+                : candidate),
+            } : current);
+            setSaveStatus("已保存到云端");
+          }
+          setCloudIssue(null);
+          setIsError(false);
+        } catch (error) {
+          if (controller.signal.aborted) return;
+          saveBlockedRef.current = true;
+          setLibrary((current) => current ? { ...current, activeProjectId: project.id } : current);
+          setCloudIssue("failed");
+          setSaveStatus("保存失败，当前编辑内容仍保留");
+          setNotice(error instanceof Error ? error.message : "保存失败，请稍后重试。");
+          setIsError(true);
+        } finally {
+          saveInFlightRef.current = false;
+          if (!saveBlockedRef.current) setRetryNonce((value) => value + 1);
+        }
+      }, 800);
+      return () => {
+        if (!requestStarted) controller.abort();
+        window.clearTimeout(timer);
+      };
+    }
+
     const timer = window.setTimeout(() => {
       const saved = saveProjectLibrary(window.localStorage, library);
       if (saved.ok) {
@@ -106,7 +319,7 @@ export default function Home() {
       }
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [isHydrated, library]);
+  }, [cloudVersions, isHydrated, library, retryNonce, session.status]);
 
   function showNotice(message: string, error = false) {
     setNotice(message);
@@ -114,10 +327,14 @@ export default function Home() {
   }
 
   function updateActiveProject(updater: (project: LocalProjectDraft) => LocalProjectDraft) {
-    setSaveStatus("保存中…");
+    setSaveStatus(session.status === "authenticated" ? "等待保存到云端…" : "保存到当前浏览器中…");
     setLibrary((current) => {
       if (!current) return current;
       const now = new Date().toISOString();
+      if (session.status === "authenticated" && current.activeProjectId) {
+        editRevisionRef.current[current.activeProjectId] =
+          (editRevisionRef.current[current.activeProjectId] ?? 0) + 1;
+      }
       return {
         ...current,
         projects: current.projects.map((project) => {
@@ -145,8 +362,40 @@ export default function Home() {
     showNotice("");
   }
 
-  function createProject() {
+  async function createCloudProject(project: LocalProjectDraft) {
+    const response = await fetch("/api/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(projectPayload(project)),
+    });
+    const payload = await responsePayload(response) as { project?: unknown } | null;
+    if (!response.ok) throw new Error(errorMessageFrom(payload));
+    const cloudProject = validatedCloudProject(payload?.project);
+    if (!cloudProject) throw new Error("云端返回的项目数据无效。");
+    return cloudProject;
+  }
+
+  async function createProject() {
     const project = createProjectDraft(`未命名项目 ${library ? library.projects.length + 1 : 1}`);
+    if (session.status === "authenticated") {
+      setSaveStatus("正在创建云端项目…");
+      try {
+        const cloudProject = await createCloudProject(project);
+        setCloudVersions((current) => ({ ...current, [cloudProject.id]: cloudProject.version }));
+        setLibrary((current) => ({
+          version: 1,
+          activeProjectId: cloudProject.id,
+          projects: [...(current?.projects ?? []), cloudProjectToDraft(cloudProject)],
+        }));
+        setSaveStatus("已保存到云端");
+        showNotice("已新建云端项目。");
+      } catch (error) {
+        setSaveStatus("创建失败，未修改现有云端项目");
+        showNotice(error instanceof Error ? error.message : "创建云端项目失败。", true);
+      }
+      return;
+    }
+
     setLibrary((current) => current
       ? { ...current, activeProjectId: project.id, projects: [...current.projects, project] }
       : { version: 1, activeProjectId: project.id, projects: [project] });
@@ -161,17 +410,103 @@ export default function Home() {
     showNotice("项目已重命名。");
   }
 
-  function deleteProject() {
+  async function deleteProject() {
     if (!library || !activeProject) return;
-    if (!window.confirm(`确定删除“${activeProject.name}”吗？此操作仅删除当前浏览器中的草稿，无法撤销。`)) return;
+    const location = session.status === "authenticated" ? "云端" : "当前浏览器";
+    if (!window.confirm(`确定删除“${activeProject.name}”吗？此操作会删除${location}中的项目，无法撤销。`)) return;
+
+    if (session.status === "authenticated") {
+      setSaveStatus("正在删除云端项目…");
+      try {
+        const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}`, { method: "DELETE" });
+        if (!response.ok) throw new Error(errorMessageFrom(await responsePayload(response)));
+      } catch (error) {
+        setSaveStatus("删除失败，项目仍保留");
+        showNotice(error instanceof Error ? error.message : "删除云端项目失败。", true);
+        return;
+      }
+    }
 
     const remaining = library.projects.filter((project) => project.id !== activeProject.id);
     if (remaining.length > 0) {
       setLibrary({ ...library, activeProjectId: remaining[0].id, projects: remaining });
+    } else if (session.status === "authenticated") {
+      setLibrary({ version: 1, activeProjectId: "", projects: [] });
     } else {
       setLibrary(initialLibrary());
     }
-    showNotice("本地项目已删除。");
+    setCloudVersions((current) => {
+      const next = { ...current };
+      delete next[activeProject.id];
+      return next;
+    });
+    delete editRevisionRef.current[activeProject.id];
+    saveBlockedRef.current = false;
+    setCloudIssue(null);
+    setSaveStatus(session.status === "authenticated" ? "云端项目已删除" : "本地项目已删除");
+    showNotice(session.status === "authenticated" ? "云端项目已删除。" : "本地项目已删除。");
+  }
+
+  function retryCloudSave() {
+    saveBlockedRef.current = false;
+    setCloudIssue(null);
+    setSaveStatus("准备重试保存…");
+    setRetryNonce((value) => value + 1);
+  }
+
+  async function loadLatestCloudProject() {
+    if (session.status !== "authenticated" || !activeProject) return;
+    if (!window.confirm("加载云端最新版本会替换当前尚未保存的编辑。建议先导出 JSON 备份，确定继续吗？")) return;
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(activeProject.id)}`);
+      const payload = await responsePayload(response) as { project?: unknown } | null;
+      if (!response.ok) throw new Error(errorMessageFrom(payload));
+      const latest = validatedCloudProject(payload?.project);
+      if (!latest) throw new Error("云端返回的项目数据无效。");
+      delete editRevisionRef.current[activeProject.id];
+      saveBlockedRef.current = false;
+      setCloudIssue(null);
+      setCloudVersions((current) => ({ ...current, [latest.id]: latest.version }));
+      setLibrary((current) => current ? {
+        ...current,
+        projects: current.projects.map((project) => project.id === latest.id
+          ? cloudProjectToDraft(latest)
+          : project),
+      } : current);
+      setSaveStatus("已加载云端最新版本");
+      showNotice("已加载云端最新版本。");
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : "加载云端项目失败。", true);
+    }
+  }
+
+  async function migrateLocalProjects() {
+    if (session.status !== "authenticated" || localMigrationProjects.length === 0) return;
+    if (!window.confirm(`将 ${localMigrationProjects.length} 个本地项目复制到你的私有云端吗？本地草稿不会被删除。`)) return;
+    setIsMigrating(true);
+    setSaveStatus("正在迁移本地项目到云端…");
+    let migratedCount = 0;
+    try {
+      for (const localProject of localMigrationProjects) {
+        const cloudProject = await createCloudProject(localProject);
+        rememberMigratedLocalId(window.localStorage, session.user.userId, localProject.id);
+        setCloudVersions((current) => ({ ...current, [cloudProject.id]: cloudProject.version }));
+        setLibrary((current) => ({
+          version: 1,
+          activeProjectId: cloudProject.id,
+          projects: [...(current?.projects ?? []), cloudProjectToDraft(cloudProject)],
+        }));
+        migratedCount += 1;
+        setLocalMigrationProjects((current) => current.filter((project) => project.id !== localProject.id));
+      }
+      setSaveStatus("本地项目已迁移到云端");
+      showNotice(`已将 ${migratedCount} 个本地项目复制到云端，本地草稿仍保留。`);
+    } catch (error) {
+      setSaveStatus("迁移中断，已成功迁移的项目不会重复处理");
+      showNotice(`已迁移 ${migratedCount} 个项目；${error instanceof Error ? error.message : "其余项目迁移失败。"}`, true);
+    } finally {
+      setIsMigrating(false);
+    }
   }
 
   function loadSample() {
@@ -180,6 +515,10 @@ export default function Home() {
   }
 
   async function handleGenerate() {
+    if (session.status !== "authenticated") {
+      showNotice("请先使用 ChatGPT 登录，再生成并保存云端故事板。", true);
+      return;
+    }
     if (!activeProject || script.trim().length < 50) {
       showNotice("脚本太短了，请至少输入 50 个字。", true);
       return;
@@ -293,6 +632,19 @@ export default function Home() {
         showNotice(validation.error, true);
         return;
       }
+      if (session.status === "authenticated") {
+        setSaveStatus("正在导入云端项目…");
+        const cloudProject = await createCloudProject(validation.value);
+        setCloudVersions((current) => ({ ...current, [cloudProject.id]: cloudProject.version }));
+        setLibrary((current) => ({
+          version: 1,
+          activeProjectId: cloudProject.id,
+          projects: [...(current?.projects ?? []), cloudProjectToDraft(cloudProject)],
+        }));
+        setSaveStatus("导入项目已保存到云端");
+        showNotice("JSON 备份已校验、导入云端并切换为当前项目。");
+        return;
+      }
       setLibrary((current) => current
         ? { ...current, activeProjectId: validation.value.id, projects: [...current.projects, validation.value] }
         : { version: 1, activeProjectId: validation.value.id, projects: [validation.value] });
@@ -308,34 +660,66 @@ export default function Home() {
     <main className="app-shell">
       <header className="topbar">
         <a className="brand" href="#top" aria-label="帧语首页"><span className="brand-mark">帧</span><span>帧语</span></a>
-        <div className="step-pill"><span />{storyboard ? "2 / 3 资产编辑" : "1 / 3 脚本解析"}</div>
+        <div className="topbar-actions">
+          <div className="step-pill"><span />{storyboard ? "2 / 3 资产编辑" : "1 / 3 脚本解析"}</div>
+          {session.status === "authenticated" ? (
+            <div className="account-pill" title={session.user.email}>
+              <span>{session.user.displayName}</span>
+              <a href={session.signOutPath}>退出</a>
+            </div>
+          ) : session.status === "anonymous" ? (
+            <a className="login-link" href={session.signInPath}>使用 ChatGPT 登录</a>
+          ) : null}
+        </div>
       </header>
 
-      <section className="project-shelf" aria-label="本地项目管理">
+      <section className="project-shelf" aria-label={session.status === "authenticated" ? "云端项目管理" : "本地项目管理"}>
         <div className="project-switcher">
-          <label htmlFor="project-select">当前项目</label>
-          <select id="project-select" value={library?.activeProjectId ?? ""} disabled={!library} onChange={(event) => {
+          <label htmlFor="project-select">{session.status === "authenticated" ? "云端项目" : "当前项目"}</label>
+          <select id="project-select" value={library?.activeProjectId ?? ""} disabled={!library || library.projects.length === 0} onChange={(event) => {
             setLibrary((current) => current ? { ...current, activeProjectId: event.target.value } : current);
-            showNotice("已切换本地项目。");
+            showNotice(session.status === "authenticated" ? "已切换云端项目。" : "已切换本地项目。");
           }}>
+            {library?.projects.length === 0 && <option value="">暂无云端项目</option>}
             {library?.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>
-          <button type="button" onClick={createProject}>+新建</button>
+          <button type="button" onClick={() => void createProject()} disabled={session.status === "loading"}>+新建</button>
           <button type="button" onClick={renameProject} disabled={!activeProject}>重命名</button>
-          <button className="danger-text" type="button" onClick={deleteProject} disabled={!activeProject}>删除</button>
+          <button className="danger-text" type="button" onClick={() => void deleteProject()} disabled={!activeProject}>删除</button>
         </div>
         <div className="backup-actions">
-          <span className="save-status" aria-live="polite"><i />{saveStatus}</span>
+          <span className={`save-status ${cloudIssue ? `status-${cloudIssue}` : ""}`} aria-live="polite"><i />{saveStatus}</span>
+          {cloudIssue === "failed" && <button type="button" onClick={retryCloudSave}>重试保存</button>}
+          {cloudIssue === "conflict" && <button type="button" onClick={() => void loadLatestCloudProject()}>加载云端最新版</button>}
           <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="导入 JSON 项目备份" onChange={(event) => void importJson(event.target.files?.[0])} />
           <button type="button" onClick={() => importInputRef.current?.click()}>导入 JSON</button>
           <button type="button" onClick={exportJson} disabled={!activeProject}>导出 JSON</button>
         </div>
       </section>
 
+      {session.status === "anonymous" && (
+        <aside className="cloud-banner" aria-label="云端保存提示">
+          <div><strong>登录后保存云端项目</strong><span>使用 ChatGPT 身份登录，即可跨设备恢复自己的私有故事板。</span></div>
+          <a href={session.signInPath}>登录并启用云端</a>
+        </aside>
+      )}
+      {session.status === "authenticated" && localMigrationProjects.length > 0 && (
+        <aside className="cloud-banner migration-banner" aria-label="迁移本地项目">
+          <div><strong>发现 {localMigrationProjects.length} 个本地项目</strong><span>只有你明确确认后才会复制到云端；本地草稿不会被删除。</span></div>
+          <button type="button" onClick={() => void migrateLocalProjects()} disabled={isMigrating}>{isMigrating ? "迁移中…" : "迁移到云端"}</button>
+        </aside>
+      )}
+      {session.status === "authenticated" && isHydrated && library?.projects.length === 0 && (
+        <aside className="cloud-banner empty-cloud" aria-label="空云端项目库">
+          <div><strong>你的云端项目库还是空的</strong><span>新建一个故事板，或迁移上方检测到的本地项目。</span></div>
+          <button type="button" onClick={() => void createProject()}>新建云端项目</button>
+        </aside>
+      )}
+
       <section className="hero" id="top">
         <div className="eyebrow">• AI 短剧故事板工作台</div>
         <h1>把脚本，变成<br /><em>可拍的每一帧</em></h1>
-        <p className="intro">粘贴短剧脚本，拆解角色、场景和镜头，<br className="desktop-break" />在当前浏览器持续编辑并导出可用的分镜资产。</p>
+        <p className="intro">粘贴短剧脚本，拆解角色、场景和镜头，<br className="desktop-break" />登录后安全保存云端，在不同设备继续创作。</p>
       </section>
 
       <section className="workspace" aria-labelledby="script-title">
@@ -350,9 +734,11 @@ export default function Home() {
         <div className="workspace-foot">
           <div className="notice-stack">
             <p className={isError ? "notice error" : "notice"} aria-live="polite">{notice || "点击生成后，脚本会发送至你配置的 AI 服务，仅用于本次生成。"}</p>
-            <p className="local-note">本地草稿只保存在当前浏览器；更换设备前请导出 JSON 备份。</p>
+            <p className="local-note">{session.status === "authenticated"
+              ? "云端数据库是当前项目的权威来源；本地草稿仅作为迁移来源保留。"
+              : "当前使用浏览器本地草稿；登录前不会自动上传任何内容。"}</p>
           </div>
-          <button className="generate-button" type="button" onClick={handleGenerate} disabled={isGenerating || !activeProject}>{isGenerating ? "生成中…" : <>生成分镜 <span aria-hidden="true">→</span></>}</button>
+          <button className="generate-button" type="button" onClick={handleGenerate} disabled={isGenerating || !activeProject || session.status !== "authenticated"}>{session.status === "anonymous" ? "登录后生成" : isGenerating ? "生成中…" : <>生成分镜 <span aria-hidden="true">→</span></>}</button>
         </div>
       </section>
 
@@ -429,7 +815,7 @@ export default function Home() {
         </section>
       )}
 
-      <footer><span>从文字到画面，先让故事站稳。</span><span>MVP+ · 本地优先工作台</span></footer>
+      <footer><span>从文字到画面，先让故事站稳。</span><span>云端项目 · 私有工作台</span></footer>
     </main>
   );
 }

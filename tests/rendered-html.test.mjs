@@ -20,6 +20,12 @@ async function render() {
   return request("/", { headers: { accept: "text/html" } });
 }
 
+const authenticatedHeaders = {
+  "content-type": "application/json",
+  "oai-authenticated-user-id": "test-user",
+  "oai-authenticated-user-email": "test@example.com",
+};
+
 test("server-renders the storyboard input experience", async () => {
   const response = await render();
   assert.equal(response.status, 200);
@@ -35,9 +41,17 @@ test("server-renders the storyboard input experience", async () => {
 });
 
 test("POST /api/generate-storyboard rejects malformed and short requests before any model call", async () => {
-  const malformedResponse = await request("/api/generate-storyboard", {
+  const anonymousResponse = await request("/api/generate-storyboard", {
     method: "POST",
     headers: { "content-type": "application/json" },
+    body: JSON.stringify({ script: "不会发送" }),
+  });
+  assert.equal(anonymousResponse.status, 401);
+  assert.deepEqual(await anonymousResponse.json(), { error: "请先登录后再生成故事板。" });
+
+  const malformedResponse = await request("/api/generate-storyboard", {
+    method: "POST",
+    headers: authenticatedHeaders,
     body: "{",
   });
 
@@ -46,12 +60,24 @@ test("POST /api/generate-storyboard rejects malformed and short requests before 
 
   const invalidResponse = await request("/api/generate-storyboard", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: authenticatedHeaders,
     body: JSON.stringify({ script: "太短" }),
   });
 
   assert.equal(invalidResponse.status, 400);
   assert.deepEqual(await invalidResponse.json(), { error: "脚本太短了，请至少输入 50 个字。" });
+});
+
+test("cloud project routes reject anonymous requests before touching D1", async () => {
+  for (const [path, method] of [["/api/projects", "GET"], ["/api/projects", "POST"], ["/api/projects/project-a", "GET"], ["/api/projects/project-a", "PUT"], ["/api/projects/project-a", "DELETE"]]) {
+    const response = await request(path, {
+      method,
+      headers: method === "GET" || method === "DELETE" ? undefined : { "content-type": "application/json" },
+      body: method === "GET" || method === "DELETE" ? undefined : "{}",
+    });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: "请先登录后再管理云端项目。" });
+  }
 });
 
 test("source contains the complete request chain, local workspace, and shared storyboard contract", async () => {
@@ -93,7 +119,18 @@ test("source contains the complete request chain, local workspace, and shared st
   assert.match(page, /重命名/);
   assert.match(page, /导入 JSON/);
   assert.match(page, /导出 JSON/);
-  assert.match(page, /本地草稿只保存在当前浏览器/);
+  assert.match(page, /登录后保存云端项目/);
+  assert.match(page, /登录前不会自动上传任何内容/);
+  assert.match(page, /迁移到云端/);
+  assert.match(page, /window\.confirm\(`将 \$\{localMigrationProjects\.length\} 个本地项目复制到你的私有云端吗/);
+  assert.match(page, /正在保存到云端/);
+  assert.match(page, /已保存到云端/);
+  assert.match(page, /保存失败，当前编辑内容仍保留/);
+  assert.match(page, /存在版本冲突/);
+  assert.match(page, /fetch\("\/api\/session"/);
+  assert.match(page, /fetch\("\/api\/projects"/);
+  assert.match(page, /method: "PUT"/);
+  assert.match(page, /method: "DELETE"/);
   assert.match(page, /createStoryboardMarkdown\(storyboard/);
   assert.match(page, /storyboard\.characters\.map/);
   assert.match(page, /storyboard\.scenes\.map/);
