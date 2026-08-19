@@ -1,100 +1,63 @@
-# vinext-starter
+# 帧语
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+帧语是一个面向 AI 短剧创作的私有云端故事板工作台。登录用户可以把脚本拆解为角色、场景和固定 6 镜头故事板，继续编辑图生视频提示词，并在不同设备恢复自己的项目。
 
-## Prerequisites
+## 核心能力
 
-- Node.js `>=22.13.0`
+- 使用 Sites / ChatGPT 平台身份登录，不维护自建账号或密码。
+- Cloudflare D1 是登录用户项目的权威数据源；每次读写均按平台用户 ID 隔离。
+- 项目保存完整脚本、角色、场景、6 个镜头和每镜头 `videoPrompt`。
+- 800ms 防抖自动保存，显示保存中、已保存、失败和版本冲突状态。
+- 本地 `localStorage` 仅用于匿名草稿、临时缓存和用户明确触发的云端迁移，不会自动上传。
+- 保留 DeepSeek 生成、提示词重建/复制、Markdown 导出和经过校验的 JSON 备份。
 
-## Quick Start
+## 本地开发
+
+要求 Node.js `>=22.13.0`。
 
 ```bash
 npm install
 npm run dev
+```
+
+本地环境变量只需要服务端使用的 DeepSeek Key：
+
+```bash
+cp .env.example .env.local
+```
+
+不要提交 `.env.local`。自动化测试不会读取或修改它，也不会向真实 DeepSeek 发请求。
+
+## 数据库
+
+`.openai/hosting.json` 声明逻辑 D1 绑定 `DB`。表结构位于 `db/schema.ts`，生成的迁移保存在 `drizzle/`。
+
+```bash
+npm run db:generate
+```
+
+`projects` 表包含 `id`、`owner_id`、`name`、`script`、`storyboard_json`、`version`、`created_at` 和 `updated_at`。更新使用 `owner_id + id + version` 原子条件，过期版本返回 409，不会静默覆盖其他设备的修改。
+
+## 身份与 API
+
+平台负责 `/signin-with-chatgpt`、`/signout-with-chatgpt` 和 `/callback`。应用只读取可信的 `oai-authenticated-user-id` 与相关显示信息，客户端不能指定 `ownerId`。
+
+- `GET /api/session`：返回当前可选登录状态和平台登录/退出路径。
+- `GET /api/projects`：列出当前用户项目。
+- `POST /api/projects`：创建当前用户项目。
+- `GET /api/projects/:id`：获取当前用户单个项目。
+- `PUT /api/projects/:id`：按版本保存当前用户项目。
+- `DELETE /api/projects/:id`：删除当前用户项目。
+- `POST /api/generate-storyboard`：登录后调用服务端 DeepSeek 生成链路。
+
+所有受保护 API 在未登录时返回安全的中文 401；项目错误不会泄露数据库细节、API Key、模型原始响应或其他用户数据。
+
+## 验证
+
+```bash
+npm test
+npm run lint
 npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
-
-## Included Shape
-
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
-
-## Workspace Auth Headers
-
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
-
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
-
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
-
-Treat the full name as optional and fall back to email when it is absent:
-
-```tsx
-import { headers } from "next/headers";
-
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
-
-  const displayName = fullName ?? email;
-  // ...
-}
-```
-
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+测试覆盖未登录、跨用户越权、无效故事板、版本冲突、保存恢复、本地备份和 mock DeepSeek 生成。部署由 Sites 管理 D1 资源、迁移、私有访问策略与运行时 `DEEPSEEK_API_KEY`。

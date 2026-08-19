@@ -52,8 +52,19 @@ export function validateProjectWriteInput(value: unknown): ValidationResult<Proj
   if (typeof value.script !== "string" || value.script.length > MAX_SCRIPT_LENGTH) {
     return { ok: false, error: "项目脚本格式不正确或内容过长。" };
   }
-  if (value.storyboard !== null && JSON.stringify(value.storyboard).length > MAX_STORYBOARD_JSON_LENGTH) {
-    return { ok: false, error: "故事板数据过大，无法保存。" };
+  if (!("storyboard" in value)) {
+    return { ok: false, error: "项目数据格式不正确。" };
+  }
+  if (value.storyboard !== null) {
+    let serializedStoryboard: string;
+    try {
+      serializedStoryboard = JSON.stringify(value.storyboard);
+    } catch {
+      return { ok: false, error: "故事板数据格式不正确。" };
+    }
+    if (serializedStoryboard.length > MAX_STORYBOARD_JSON_LENGTH) {
+      return { ok: false, error: "故事板数据过大，无法保存。" };
+    }
   }
 
   const now = "2000-01-01T00:00:00.000Z";

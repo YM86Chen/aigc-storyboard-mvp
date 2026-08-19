@@ -144,6 +144,14 @@ test("invalid storyboard data and attempted owner injection are rejected before 
   );
   assert.equal(injectionResponse.status, 400);
   assert.deepEqual(await injectionResponse.json(), { error: "项目数据格式不正确。" });
+
+  const missingStoryboardResponse = await createProjectResponse(
+    jsonRequest("POST", { name: "缺少故事板字段", script: "" }),
+    "user-a",
+    store,
+  );
+  assert.equal(missingStoryboardResponse.status, 400);
+  assert.deepEqual(await missingStoryboardResponse.json(), { error: "项目数据格式不正确。" });
   assert.equal(store.rows.size, 0);
 });
 

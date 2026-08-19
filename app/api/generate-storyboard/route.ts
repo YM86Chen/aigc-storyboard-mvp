@@ -1,3 +1,4 @@
+import { getChatGPTUser } from "@/app/chatgpt-auth";
 import { DeepSeekError, generateStoryboardWithDeepSeek } from "@/lib/deepseek";
 
 const MIN_SCRIPT_LENGTH = 50;
@@ -7,6 +8,11 @@ function errorResponse(error: string, status: number) {
 }
 
 export async function POST(request: Request) {
+  const user = await getChatGPTUser();
+  if (!user) {
+    return errorResponse("请先登录后再生成故事板。", 401);
+  }
+
   let payload: unknown;
 
   try {

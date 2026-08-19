@@ -10,3 +10,5 @@ CREATE TABLE `projects` (
 );
 --> statement-breakpoint
 CREATE INDEX `idx_projects_owner_updated` ON `projects` (`owner_id`,`updated_at`);
+--> statement-breakpoint
+PRAGMA optimize;
