@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DeepSeekError, generateStoryboardWithDeepSeek } from "../lib/deepseek.ts";
+import { createMockStoryboard, createStoryboardMarkdown } from "../lib/storyboard.ts";
 
 const SCRIPT = "《接口测试》这是一段足够长的短剧脚本，用来验证 DeepSeek 请求会生成符合故事板契约的 JSON，并且测试全程使用 mock fetch，不会产生任何真实模型费用。";
 
@@ -26,7 +27,7 @@ function completionResponse(content: string) {
   return Response.json({ choices: [{ message: { content } }] });
 }
 
-test("DeepSeek request uses JSON Output and injects the trusted source script", async () => {
+test("DeepSeek request uses JSON Output, injects the trusted source script, and derives video prompts", async () => {
   let requestBody: Record<string, unknown> | undefined;
   const result = await generateStoryboardWithDeepSeek(SCRIPT, {
     apiKey: "test-key",
@@ -36,7 +37,17 @@ test("DeepSeek request uses JSON Output and injects the trusted source script", 
     },
   });
 
-  assert.deepEqual(result, { ...MODEL_STORYBOARD, sourceScript: SCRIPT });
+  assert.equal(result.sourceScript, SCRIPT);
+  assert.deepEqual(result.characters, MODEL_STORYBOARD.characters);
+  assert.deepEqual(result.scenes, MODEL_STORYBOARD.scenes);
+  assert.equal(result.shots.length, 6);
+  assert.ok(result.shots.every((shot) => shot.videoPrompt.trim().length > 0));
+  assert.match(result.shots[0].videoPrompt, /镜头景别：远景/);
+  assert.match(result.shots[0].videoPrompt, /画面动作：动作一/);
+  assert.match(result.shots[0].videoPrompt, /情绪氛围：平静/);
+  assert.match(result.shots[0].videoPrompt, /画面视觉：画面一/);
+  assert.match(result.shots[0].videoPrompt, /场景设定：测试场景，夜晚，室内/);
+  assert.match(result.shots[0].videoPrompt, /角色一致性：角色甲：测试角色/);
   assert.equal(requestBody?.model, "deepseek-v4-pro");
   assert.deepEqual(requestBody?.response_format, { type: "json_object" });
   assert.deepEqual(requestBody?.thinking, { type: "disabled" });
@@ -55,6 +66,29 @@ test("DeepSeek generator ignores a model-provided sourceScript", async () => {
   });
 
   assert.equal(result.sourceScript, SCRIPT);
+  assert.ok(result.shots.every((shot) => shot.videoPrompt.trim().length > 0));
+});
+
+test("Markdown export uses the current editable video prompt", async () => {
+  const storyboard = await generateStoryboardWithDeepSeek(SCRIPT, {
+    apiKey: "test-key",
+    fetchImpl: async () => completionResponse(JSON.stringify(MODEL_STORYBOARD)),
+  });
+  storyboard.shots[0].videoPrompt = "已编辑的图生视频提示词";
+
+  const markdown = createStoryboardMarkdown(storyboard, "2026/8/19 12:00:00");
+
+  assert.match(markdown, /\*\*图生视频提示词：\*\* 已编辑的图生视频提示词/);
+  assert.doesNotMatch(markdown, /图生视频建议/);
+});
+
+test("local mock storyboard also includes copyable video prompts", () => {
+  const storyboard = createMockStoryboard(SCRIPT);
+
+  assert.equal(storyboard.shots.length, 6);
+  assert.ok(storyboard.shots.every((shot) => shot.videoPrompt.trim().length > 0));
+  assert.match(storyboard.shots[0].videoPrompt, /末班地铁车厢/);
+  assert.match(storyboard.shots[0].videoPrompt, /林夏：/);
 });
 
 test("DeepSeek generator reports a missing API key without calling the network", async () => {

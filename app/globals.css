@@ -99,6 +99,8 @@ textarea:focus { border-color: var(--orange); box-shadow: 0 0 0 3px rgba(232,95,
 .shot-fields { display: grid; gap: 13px; padding: 16px; }
 .shot-fields label { display: grid; grid-template-columns: 38px 1fr; align-items: start; gap: 8px; }
 .shot-fields label > span { padding-top: 9px; color: var(--muted); font-size: 10px; }
+.shot-fields .video-prompt-field { grid-template-columns: 1fr; gap: 5px; }
+.shot-fields .video-prompt-field > span { padding-top: 0; }
 .shot-fields select, .shot-fields input, .shot-fields textarea { width: 100%; color: var(--ink); background: #fffdf8; border: 1px solid #ddd5c8; border-radius: 7px; outline: none; font-size: 12px; }
 .shot-fields select, .shot-fields input { height: 34px; padding: 0 9px; }
 .shot-fields textarea { min-height: 58px; padding: 8px 9px; resize: vertical; line-height: 1.5; }

@@ -1,4 +1,4 @@
-import { validateGeneratedStoryboard, type Storyboard } from "./storyboard.ts";
+import { createStoryboardWithVideoPrompts, validateGeneratedStoryboard, type Storyboard } from "./storyboard.ts";
 
 const DEEPSEEK_CHAT_COMPLETIONS_URL = "https://api.deepseek.com/chat/completions";
 
@@ -118,5 +118,5 @@ export async function generateStoryboardWithDeepSeek(
     throw new DeepSeekError(validation.error, 502);
   }
 
-  return { ...validation.value, sourceScript: script };
+  return createStoryboardWithVideoPrompts(validation.value, script);
 }

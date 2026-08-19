@@ -4,6 +4,7 @@ import { useState } from "react";
 import {
   FRAMING_OPTIONS,
   SAMPLE_SCRIPT,
+  createStoryboardMarkdown,
   type Shot,
   type Storyboard,
 } from "@/lib/storyboard";
@@ -24,7 +25,12 @@ function isStoryboard(payload: unknown): payload is Storyboard {
     && typeof value.sourceScript === "string"
     && Array.isArray(value.characters)
     && Array.isArray(value.scenes)
-    && Array.isArray(value.shots);
+    && Array.isArray(value.shots)
+    && value.shots.every((shot) => {
+      return Boolean(shot)
+        && typeof shot === "object"
+        && typeof (shot as { videoPrompt?: unknown }).videoPrompt === "string";
+    });
 }
 
 export default function Home() {
@@ -80,7 +86,7 @@ export default function Home() {
     }
   }
 
-  function updateShot<K extends "framing" | "action" | "emotion">(id: number, field: K, value: Shot[K]) {
+  function updateShot<K extends "framing" | "action" | "emotion" | "videoPrompt">(id: number, field: K, value: Shot[K]) {
     setStoryboard((current) => current && {
       ...current,
       shots: current.shots.map((shot) => shot.id === id ? { ...shot, [field]: value } : shot),
@@ -91,45 +97,7 @@ export default function Home() {
   function exportMarkdown() {
     if (!storyboard) return;
 
-    const shotMarkdown = storyboard.shots.map((shot) => `### 镜头 ${String(shot.id).padStart(2, "0")}
-
-- **景别：** ${shot.framing}
-- **动作：** ${shot.action}
-- **情绪：** ${shot.emotion}
-- **画面提示词：** ${shot.visual}
-- **图生视频建议：** 保持角色与场景一致，突出“${shot.action}”，情绪为“${shot.emotion}”。`).join("\n\n");
-
-    const characterMarkdown = storyboard.characters.map((character) => `### ${character.name}
-- **身份：** ${character.role}
-- **设定：** ${character.description}`).join("\n\n");
-
-    const sceneMarkdown = storyboard.scenes.map((scene) => `### ${scene.id.toUpperCase()} · ${scene.name}
-${scene.description}`).join("\n\n");
-
-    const markdown = `# ${storyboard.title} · 分镜资产包
-
-> 由帧语本地 MVP 生成，可复制到即梦、可灵或 Seedance 工作流中继续使用。
-
-## 原始脚本
-
-${storyboard.sourceScript.trim()}
-
-## 角色设定
-
-${characterMarkdown}
-
-## 场景设定
-
-${sceneMarkdown}
-
-## 镜头清单
-
-${shotMarkdown}
-
----
-
-生成时间：${new Date().toLocaleString("zh-CN")}
-`;
+    const markdown = createStoryboardMarkdown(storyboard, new Date().toLocaleString("zh-CN"));
 
     const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -262,6 +230,10 @@ ${shotMarkdown}
                     <label>
                       <span>情绪</span>
                       <input value={shot.emotion} onChange={(event) => updateShot(shot.id, "emotion", event.target.value)} />
+                    </label>
+                    <label className="video-prompt-field">
+                      <span>图生视频提示词</span>
+                      <textarea value={shot.videoPrompt} onChange={(event) => updateShot(shot.id, "videoPrompt", event.target.value)} />
                     </label>
                   </div>
                 </article>

@@ -77,6 +77,9 @@ test("source contains the complete request chain, DeepSeek boundary, and shared 
   assert.match(page, /脚本会发送至你配置的 AI 服务，仅用于本次生成。/);
   assert.match(page, /02 · AI 生成结果/);
   assert.match(page, /updateShot/);
+  assert.match(page, /图生视频提示词/);
+  assert.match(page, /updateShot\(shot\.id, "videoPrompt"/);
+  assert.match(page, /createStoryboardMarkdown\(storyboard/);
   assert.match(page, /storyboard\.characters\.map/);
   assert.match(page, /storyboard\.scenes\.map/);
   assert.match(page, /storyboard\.shots\.map/);
@@ -88,6 +91,9 @@ test("source contains the complete request chain, DeepSeek boundary, and shared 
   }
   assert.match(storyboard, /export function createMockStoryboard/);
   assert.match(storyboard, /export function validateGeneratedStoryboard/);
+  assert.match(storyboard, /videoPrompt: string/);
+  assert.match(storyboard, /export function createStoryboardWithVideoPrompts/);
+  assert.match(storyboard, /export function createStoryboardMarkdown/);
   assert.match(storyboard, /const FRAMING_OPTIONS/);
   assert.equal((storyboard.match(/sceneId: "s0[12]"/g) ?? []).length, 6);
   assert.match(route, /generateStoryboardWithDeepSeek/);
@@ -96,6 +102,7 @@ test("source contains the complete request chain, DeepSeek boundary, and shared 
   assert.match(deepseek, /model: "deepseek-v4-pro"/);
   assert.match(deepseek, /response_format: \{ type: "json_object" \}/);
   assert.match(deepseek, /thinking: \{ type: "disabled" \}/);
+  assert.match(deepseek, /createStoryboardWithVideoPrompts/);
   assert.match(deepseek, /尚未配置 DeepSeek API Key。/);
   assert.equal(envExample, "DEEPSEEK_API_KEY=\n");
   assert.match(gitignore, /\.env\*/);

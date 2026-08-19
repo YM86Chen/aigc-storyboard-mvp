@@ -24,6 +24,7 @@ export interface Shot {
   action: string;
   emotion: string;
   visual: string;
+  videoPrompt: string;
 }
 
 export interface Storyboard {
@@ -34,7 +35,11 @@ export interface Storyboard {
   shots: Shot[];
 }
 
-export type GeneratedStoryboard = Omit<Storyboard, "sourceScript">;
+export type GeneratedShot = Omit<Shot, "videoPrompt">;
+
+export type GeneratedStoryboard = Omit<Storyboard, "sourceScript" | "shots"> & {
+  shots: GeneratedShot[];
+};
 
 export type StoryboardValidationResult =
   | { ok: true; value: GeneratedStoryboard }
@@ -123,7 +128,7 @@ export function validateGeneratedStoryboard(value: unknown): StoryboardValidatio
     }
   }
 
-  const validShots = shots as Shot[];
+  const validShots = shots as GeneratedShot[];
   if (!hasUniqueIds(validShots)) {
     return { ok: false, error: "模型返回的镜头 ID 存在重复，请重试。" };
   }
@@ -140,9 +145,82 @@ export function validateGeneratedStoryboard(value: unknown): StoryboardValidatio
 }
 
 export function isStoryboard(value: unknown): value is Storyboard {
-  return isRecord(value)
-    && isNonEmptyString(value.sourceScript)
-    && validateGeneratedStoryboard(value).ok;
+  if (!isRecord(value) || !isNonEmptyString(value.sourceScript) || !validateGeneratedStoryboard(value).ok) {
+    return false;
+  }
+
+  return Array.isArray(value.shots)
+    && value.shots.every((shot) => isRecord(shot) && isNonEmptyString(shot.videoPrompt));
+}
+
+function videoPromptForShot(
+  shot: GeneratedShot,
+  scene: Scene,
+  characters: Character[],
+) {
+  const characterReference = characters
+    .map((character) => `${character.name}：${character.description}`)
+    .join("；");
+
+  return `镜头景别：${shot.framing}\n画面动作：${shot.action}\n情绪氛围：${shot.emotion}\n画面视觉：${shot.visual}\n场景设定：${scene.name}，${scene.description}\n角色一致性：${characterReference}`;
+}
+
+export function createStoryboardWithVideoPrompts(
+  storyboard: GeneratedStoryboard,
+  sourceScript: string,
+): Storyboard {
+  const scenesById = new Map(storyboard.scenes.map((scene) => [scene.id, scene]));
+
+  return {
+    ...storyboard,
+    sourceScript,
+    shots: storyboard.shots.map((shot) => ({
+      ...shot,
+      videoPrompt: videoPromptForShot(shot, scenesById.get(shot.sceneId)!, storyboard.characters),
+    })),
+  };
+}
+
+export function createStoryboardMarkdown(storyboard: Storyboard, generatedAt: string) {
+  const shotMarkdown = storyboard.shots.map((shot) => `### 镜头 ${String(shot.id).padStart(2, "0")}
+
+- **景别：** ${shot.framing}
+- **动作：** ${shot.action}
+- **情绪：** ${shot.emotion}
+- **画面提示词：** ${shot.visual}
+- **图生视频提示词：** ${shot.videoPrompt}`).join("\n\n");
+
+  const characterMarkdown = storyboard.characters.map((character) => `### ${character.name}
+- **身份：** ${character.role}
+- **设定：** ${character.description}`).join("\n\n");
+
+  const sceneMarkdown = storyboard.scenes.map((scene) => `### ${scene.id.toUpperCase()} · ${scene.name}
+${scene.description}`).join("\n\n");
+
+  return `# ${storyboard.title} · 分镜资产包
+
+> 由帧语本地 MVP 生成，可复制到即梦、可灵或 Seedance 工作流中继续使用。
+
+## 原始脚本
+
+${storyboard.sourceScript.trim()}
+
+## 角色设定
+
+${characterMarkdown}
+
+## 场景设定
+
+${sceneMarkdown}
+
+## 镜头清单
+
+${shotMarkdown}
+
+---
+
+生成时间：${generatedAt}
+`;
 }
 
 export const SAMPLE_SCRIPT = `《最后一班地铁》
@@ -155,7 +233,8 @@ export const SAMPLE_SCRIPT = `《最后一班地铁》
 
 车门缓缓打开，站台上站满了沉默的人影。林夏握紧手机，屏幕上又出现一行字：“现在，假装你认识她。”`;
 
-const MOCK_STORYBOARD: Omit<Storyboard, "title" | "sourceScript"> = {
+const MOCK_STORYBOARD: GeneratedStoryboard = {
+  title: "",
   characters: [
     {
       id: "lin-xia",
@@ -197,11 +276,11 @@ function titleFromScript(script: string) {
 }
 
 export function createMockStoryboard(sourceScript: string): Storyboard {
-  return {
+  return createStoryboardWithVideoPrompts({
+    ...MOCK_STORYBOARD,
     title: titleFromScript(sourceScript),
-    sourceScript,
     characters: MOCK_STORYBOARD.characters.map((character) => ({ ...character })),
     scenes: MOCK_STORYBOARD.scenes.map((scene) => ({ ...scene })),
     shots: MOCK_STORYBOARD.shots.map((shot) => ({ ...shot })),
-  };
+  }, sourceScript);
 }
