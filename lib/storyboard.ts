@@ -45,6 +45,10 @@ export type StoryboardValidationResult =
   | { ok: true; value: GeneratedStoryboard }
   | { ok: false; error: string };
 
+export type SavedStoryboardValidationResult =
+  | { ok: true; value: Storyboard }
+  | { ok: false; error: string };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -144,16 +148,35 @@ export function validateGeneratedStoryboard(value: unknown): StoryboardValidatio
   };
 }
 
-export function isStoryboard(value: unknown): value is Storyboard {
-  if (!isRecord(value) || !isNonEmptyString(value.sourceScript) || !validateGeneratedStoryboard(value).ok) {
-    return false;
+export function validateStoryboard(value: unknown): SavedStoryboardValidationResult {
+  if (!isRecord(value) || !isNonEmptyString(value.sourceScript)) {
+    return { ok: false, error: "项目缺少有效的原始脚本。" };
   }
 
-  return Array.isArray(value.shots)
-    && value.shots.every((shot) => isRecord(shot) && isNonEmptyString(shot.videoPrompt));
+  const generatedValidation = validateGeneratedStoryboard(value);
+  if (!generatedValidation.ok) {
+    return generatedValidation;
+  }
+
+  if (!Array.isArray(value.shots)) {
+    return { ok: false, error: "项目缺少镜头数据。" };
+  }
+
+  const invalidPromptIndex = value.shots.findIndex((shot) => {
+    return !isRecord(shot) || !isNonEmptyString(shot.videoPrompt);
+  });
+  if (invalidPromptIndex >= 0) {
+    return { ok: false, error: `第 ${invalidPromptIndex + 1} 个镜头缺少图生视频提示词。` };
+  }
+
+  return { ok: true, value: value as unknown as Storyboard };
 }
 
-function videoPromptForShot(
+export function isStoryboard(value: unknown): value is Storyboard {
+  return validateStoryboard(value).ok;
+}
+
+export function videoPromptForShot(
   shot: GeneratedShot,
   scene: Scene,
   characters: Character[],
@@ -181,9 +204,38 @@ export function createStoryboardWithVideoPrompts(
   };
 }
 
-export function createStoryboardMarkdown(storyboard: Storyboard, generatedAt: string) {
-  const shotMarkdown = storyboard.shots.map((shot) => `### 镜头 ${String(shot.id).padStart(2, "0")}
+export function rebuildVideoPrompts(storyboard: Storyboard): Storyboard {
+  const scenesById = new Map(storyboard.scenes.map((scene) => [scene.id, scene]));
 
+  return {
+    ...storyboard,
+    characters: storyboard.characters.map((character) => ({ ...character })),
+    scenes: storyboard.scenes.map((scene) => ({ ...scene })),
+    shots: storyboard.shots.map((shot) => ({
+      ...shot,
+      videoPrompt: videoPromptForShot(shot, scenesById.get(shot.sceneId)!, storyboard.characters),
+    })),
+  };
+}
+
+export function moveStoryboardShot(storyboard: Storyboard, index: number, direction: -1 | 1): Storyboard {
+  const target = index + direction;
+  if (target < 0 || target >= storyboard.shots.length) {
+    return storyboard;
+  }
+
+  const shots = storyboard.shots.map((shot) => ({ ...shot }));
+  [shots[index], shots[target]] = [shots[target], shots[index]];
+  return {
+    ...storyboard,
+    shots: shots.map((shot, shotIndex) => ({ ...shot, id: shotIndex + 1 })),
+  };
+}
+
+export function createStoryboardMarkdown(storyboard: Storyboard, generatedAt: string) {
+  const shotMarkdown = storyboard.shots.map((shot, index) => `### 镜头 ${String(index + 1).padStart(2, "0")}
+
+- **所属场景：** ${shot.sceneId}
 - **景别：** ${shot.framing}
 - **动作：** ${shot.action}
 - **情绪：** ${shot.emotion}

@@ -54,11 +54,12 @@ test("POST /api/generate-storyboard rejects malformed and short requests before 
   assert.deepEqual(await invalidResponse.json(), { error: "脚本太短了，请至少输入 50 个字。" });
 });
 
-test("source contains the complete request chain, DeepSeek boundary, and shared storyboard contract", async () => {
-  const [page, packageJson, storyboard, route, deepseek, envExample, gitignore] = await Promise.all([
+test("source contains the complete request chain, local workspace, and shared storyboard contract", async () => {
+  const [page, packageJson, storyboard, projects, route, deepseek, envExample, gitignore] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../lib/storyboard.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/projects.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/generate-storyboard/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/deepseek.ts", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
@@ -67,7 +68,7 @@ test("source contains the complete request chain, DeepSeek boundary, and shared 
 
   assert.match(page, /from "@\/lib\/storyboard"/);
   assert.doesNotMatch(page, /const INITIAL_SHOTS|type Shot =/);
-  assert.match(page, /if \(script\.trim\(\)\.length < 50\)/);
+  assert.match(page, /script\.trim\(\)\.length < 50/);
   assert.match(page, /脚本太短了，请至少输入 50 个字。/);
   assert.doesNotMatch(page, /createMockStoryboard/);
   assert.match(page, /fetch\("\/api\/generate-storyboard"/);
@@ -79,12 +80,26 @@ test("source contains the complete request chain, DeepSeek boundary, and shared 
   assert.match(page, /updateShot/);
   assert.match(page, /图生视频提示词/);
   assert.match(page, /updateShot\(shot\.id, "videoPrompt"/);
+  assert.match(page, /updateShot\(shot\.id, "sceneId"/);
+  assert.match(page, /updateShot\(shot\.id, "visual"/);
+  assert.match(page, /navigator\.clipboard\.writeText/);
+  assert.match(page, /moveStoryboardShot/);
+  assert.match(page, /按当前资产重建提示词/);
+  assert.match(page, /window\.confirm\("按当前角色/);
+  assert.match(page, /window\.confirm\(`确定删除/);
+  assert.match(page, /window\.localStorage\.setItem/);
+  assert.match(page, /window\.localStorage\.getItem/);
+  assert.match(page, /新建/);
+  assert.match(page, /重命名/);
+  assert.match(page, /导入 JSON/);
+  assert.match(page, /导出 JSON/);
+  assert.match(page, /本地草稿只保存在当前浏览器/);
   assert.match(page, /createStoryboardMarkdown\(storyboard/);
   assert.match(page, /storyboard\.characters\.map/);
   assert.match(page, /storyboard\.scenes\.map/);
   assert.match(page, /storyboard\.shots\.map/);
-  assert.match(page, /new Blob\(\[markdown\]/);
-  assert.match(page, /link\.download = `\$\{storyboard\.title\}-分镜资产包\.md`/);
+  assert.match(page, /new Blob\(\[text\]/);
+  assert.match(page, /分镜资产包\.md/);
 
   for (const typeName of ["Storyboard", "Character", "Scene", "Shot"]) {
     assert.match(storyboard, new RegExp(`export interface ${typeName}`));
@@ -94,6 +109,9 @@ test("source contains the complete request chain, DeepSeek boundary, and shared 
   assert.match(storyboard, /videoPrompt: string/);
   assert.match(storyboard, /export function createStoryboardWithVideoPrompts/);
   assert.match(storyboard, /export function createStoryboardMarkdown/);
+  assert.match(storyboard, /export function validateStoryboard/);
+  assert.match(storyboard, /export function rebuildVideoPrompts/);
+  assert.match(storyboard, /export function moveStoryboardShot/);
   assert.match(storyboard, /const FRAMING_OPTIONS/);
   assert.equal((storyboard.match(/sceneId: "s0[12]"/g) ?? []).length, 6);
   assert.match(route, /generateStoryboardWithDeepSeek/);
@@ -104,6 +122,10 @@ test("source contains the complete request chain, DeepSeek boundary, and shared 
   assert.match(deepseek, /thinking: \{ type: "disabled" \}/);
   assert.match(deepseek, /createStoryboardWithVideoPrompts/);
   assert.match(deepseek, /尚未配置 DeepSeek API Key。/);
+  assert.match(projects, /PROJECT_LIBRARY_STORAGE_KEY/);
+  assert.match(projects, /export function validateProjectLibrary/);
+  assert.match(projects, /export function createProjectBackup/);
+  assert.match(projects, /export function parseProjectBackup/);
   assert.equal(envExample, "DEEPSEEK_API_KEY=\n");
   assert.match(gitignore, /\.env\*/);
   assert.match(gitignore, /!\.env\.example/);
