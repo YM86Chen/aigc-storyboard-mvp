@@ -34,6 +34,69 @@ export interface Storyboard {
   shots: Shot[];
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isCharacter(value: unknown): value is Character {
+  return isRecord(value)
+    && isNonEmptyString(value.id)
+    && isNonEmptyString(value.name)
+    && isNonEmptyString(value.role)
+    && isNonEmptyString(value.description)
+    && isNonEmptyString(value.avatarLabel)
+    && (value.avatarTone === "orange" || value.avatarTone === "dark");
+}
+
+function isScene(value: unknown): value is Scene {
+  return isRecord(value)
+    && isNonEmptyString(value.id)
+    && isNonEmptyString(value.name)
+    && isNonEmptyString(value.description);
+}
+
+function isShot(value: unknown): value is Shot {
+  return isRecord(value)
+    && typeof value.id === "number"
+    && Number.isInteger(value.id)
+    && isNonEmptyString(value.sceneId)
+    && typeof value.framing === "string"
+    && FRAMING_OPTIONS.includes(value.framing as ShotFraming)
+    && isNonEmptyString(value.action)
+    && isNonEmptyString(value.emotion)
+    && isNonEmptyString(value.visual);
+}
+
+function hasUniqueIds(items: Array<{ id: string | number }>) {
+  return new Set(items.map((item) => item.id)).size === items.length;
+}
+
+export function isStoryboard(value: unknown, expectedSourceScript?: string): value is Storyboard {
+  if (!isRecord(value)
+    || !isNonEmptyString(value.title)
+    || !isNonEmptyString(value.sourceScript)
+    || (expectedSourceScript !== undefined && value.sourceScript !== expectedSourceScript)) {
+    return false;
+  }
+
+  const { characters, scenes, shots } = value;
+  if (!Array.isArray(characters) || characters.length === 0 || !characters.every(isCharacter)
+    || !Array.isArray(scenes) || scenes.length === 0 || !scenes.every(isScene)
+    || !Array.isArray(shots) || shots.length !== 6 || !shots.every(isShot)) {
+    return false;
+  }
+
+  const sceneIds = new Set(scenes.map((scene) => scene.id));
+  return hasUniqueIds(characters)
+    && hasUniqueIds(scenes)
+    && hasUniqueIds(shots)
+    && shots.every((shot) => sceneIds.has(shot.sceneId));
+}
+
 export const SAMPLE_SCRIPT = `《最后一班地铁》
 
 深夜，林夏独自坐在空荡的末班地铁里。车窗外一片漆黑，手机忽然收到一条陌生短信：“不要在下一站下车。”

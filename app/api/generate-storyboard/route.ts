@@ -1,4 +1,4 @@
-import { createMockStoryboard } from "@/lib/storyboard";
+import { DeepSeekError, generateStoryboardWithDeepSeek } from "@/lib/deepseek";
 
 const MIN_SCRIPT_LENGTH = 50;
 
@@ -25,5 +25,13 @@ export async function POST(request: Request) {
     return errorResponse("脚本太短了，请至少输入 50 个字。", 400);
   }
 
-  return Response.json(createMockStoryboard(script));
+  try {
+    return Response.json(await generateStoryboardWithDeepSeek(script));
+  } catch (error) {
+    if (error instanceof DeepSeekError) {
+      return errorResponse(error.message, error.status);
+    }
+
+    return errorResponse("生成故事板时发生意外错误，请稍后重试。", 500);
+  }
 }

@@ -4,10 +4,6 @@ import test from "node:test";
 
 const projectRoot = new URL("../", import.meta.url);
 
-const VALID_SCRIPT = `《接口测试》
-
-这是一段足够长的测试短剧脚本，用来验证页面提交 JSON 后，服务端能够接收脚本文本、生成符合故事板契约的结果，并将它安全地返回给前端页面。`;
-
 async function request(path, init = {}) {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
@@ -38,20 +34,15 @@ test("server-renders the storyboard input experience", async () => {
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/);
 });
 
-test("POST /api/generate-storyboard returns a Storyboard and validates input", async () => {
-  const response = await request("/api/generate-storyboard", {
+test("POST /api/generate-storyboard rejects malformed and short requests before any model call", async () => {
+  const malformedResponse = await request("/api/generate-storyboard", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ script: VALID_SCRIPT }),
+    body: "{",
   });
 
-  assert.equal(response.status, 200);
-  const storyboard = await response.json();
-  assert.equal(storyboard.title, "接口测试");
-  assert.equal(storyboard.sourceScript, VALID_SCRIPT);
-  assert.equal(storyboard.characters.length, 2);
-  assert.equal(storyboard.scenes.length, 2);
-  assert.equal(storyboard.shots.length, 6);
+  assert.equal(malformedResponse.status, 400);
+  assert.deepEqual(await malformedResponse.json(), { error: "请求内容必须是 JSON 格式。" });
 
   const invalidResponse = await request("/api/generate-storyboard", {
     method: "POST",
@@ -63,11 +54,15 @@ test("POST /api/generate-storyboard returns a Storyboard and validates input", a
   assert.deepEqual(await invalidResponse.json(), { error: "脚本太短了，请至少输入 50 个字。" });
 });
 
-test("source contains the complete local MVP interactions and shared storyboard contract", async () => {
-  const [page, packageJson, storyboard] = await Promise.all([
+test("source contains the complete request chain, DeepSeek boundary, and shared storyboard contract", async () => {
+  const [page, packageJson, storyboard, route, deepseek, envExample, gitignore] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../lib/storyboard.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/api/generate-storyboard/route.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/deepseek.ts", import.meta.url), "utf8"),
+    readFile(new URL("../.env.example", import.meta.url), "utf8"),
+    readFile(new URL("../.gitignore", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /from "@\/lib\/storyboard"/);
@@ -90,8 +85,19 @@ test("source contains the complete local MVP interactions and shared storyboard 
     assert.match(storyboard, new RegExp(`export interface ${typeName}`));
   }
   assert.match(storyboard, /export function createMockStoryboard/);
+  assert.match(storyboard, /export function isStoryboard/);
   assert.match(storyboard, /const FRAMING_OPTIONS/);
   assert.equal((storyboard.match(/sceneId: "s0[12]"/g) ?? []).length, 6);
+  assert.match(route, /generateStoryboardWithDeepSeek/);
+  assert.doesNotMatch(route, /createMockStoryboard/);
+  assert.match(deepseek, /https:\/\/api\.deepseek\.com\/chat\/completions/);
+  assert.match(deepseek, /model: "deepseek-v4-pro"/);
+  assert.match(deepseek, /response_format: \{ type: "json_object" \}/);
+  assert.match(deepseek, /thinking: \{ type: "disabled" \}/);
+  assert.match(deepseek, /尚未配置 DeepSeek API Key。/);
+  assert.equal(envExample, "DEEPSEEK_API_KEY=\n");
+  assert.match(gitignore, /\.env\*/);
+  assert.match(gitignore, /!\.env\.example/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));
