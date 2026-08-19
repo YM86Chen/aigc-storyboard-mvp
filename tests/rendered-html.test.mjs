@@ -87,8 +87,8 @@ test("source contains the complete request chain, local workspace, and shared st
   assert.match(page, /按当前资产重建提示词/);
   assert.match(page, /window\.confirm\("按当前角色/);
   assert.match(page, /window\.confirm\(`确定删除/);
-  assert.match(page, /window\.localStorage\.setItem/);
-  assert.match(page, /window\.localStorage\.getItem/);
+  assert.match(page, /saveProjectLibrary\(window\.localStorage/);
+  assert.match(page, /loadProjectLibrary\(window\.localStorage/);
   assert.match(page, /新建/);
   assert.match(page, /重命名/);
   assert.match(page, /导入 JSON/);
@@ -124,6 +124,8 @@ test("source contains the complete request chain, local workspace, and shared st
   assert.match(deepseek, /尚未配置 DeepSeek API Key。/);
   assert.match(projects, /PROJECT_LIBRARY_STORAGE_KEY/);
   assert.match(projects, /export function validateProjectLibrary/);
+  assert.match(projects, /export function saveProjectLibrary/);
+  assert.match(projects, /export function loadProjectLibrary/);
   assert.match(projects, /export function createProjectBackup/);
   assert.match(projects, /export function parseProjectBackup/);
   assert.equal(envExample, "DEEPSEEK_API_KEY=\n");

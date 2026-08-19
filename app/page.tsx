@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  PROJECT_LIBRARY_STORAGE_KEY,
   createProjectBackup,
   createProjectDraft,
+  loadProjectLibrary,
   parseProjectBackup,
-  validateProjectLibrary,
+  saveProjectLibrary,
   type LocalProjectDraft,
   type ProjectLibrary,
 } from "@/lib/projects";
@@ -70,21 +70,18 @@ export default function Home() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       try {
-        const saved = window.localStorage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
-        if (!saved) {
+        const restored = loadProjectLibrary(window.localStorage);
+        if (!restored.ok) {
+          setLibrary(initialLibrary());
+          setSaveStatus("本地草稿无法恢复，已新建空白项目");
+          setNotice(restored.error);
+          setIsError(true);
+        } else if (!restored.value) {
           setLibrary(initialLibrary());
           setSaveStatus("已建立本地项目库");
         } else {
-          const validation = validateProjectLibrary(JSON.parse(saved));
-          if (validation.ok) {
-            setLibrary(validation.value);
-            setSaveStatus("已恢复本地草稿");
-          } else {
-            setLibrary(initialLibrary());
-            setSaveStatus("本地草稿无法恢复，已新建空白项目");
-            setNotice(validation.error);
-            setIsError(true);
-          }
+          setLibrary(restored.value);
+          setSaveStatus("已恢复本地草稿");
         }
       } catch {
         setLibrary(initialLibrary());
@@ -101,16 +98,11 @@ export default function Home() {
   useEffect(() => {
     if (!isHydrated || !library) return;
     const timer = window.setTimeout(() => {
-      const validation = validateProjectLibrary(library);
-      if (!validation.ok) {
-        setSaveStatus(`尚未保存：${validation.error}`);
-        return;
-      }
-      try {
-        window.localStorage.setItem(PROJECT_LIBRARY_STORAGE_KEY, JSON.stringify(validation.value));
+      const saved = saveProjectLibrary(window.localStorage, library);
+      if (saved.ok) {
         setSaveStatus("已自动保存到当前浏览器");
-      } catch {
-        setSaveStatus("自动保存失败，请导出 JSON 备份");
+      } else {
+        setSaveStatus(`尚未保存：${saved.error}`);
       }
     }, 350);
     return () => window.clearTimeout(timer);

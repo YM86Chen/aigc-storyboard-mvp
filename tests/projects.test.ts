@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   PROJECT_BACKUP_FORMAT,
+  PROJECT_LIBRARY_STORAGE_KEY,
   createProjectBackup,
   createProjectDraft,
+  loadProjectLibrary,
   parseProjectBackup,
+  saveProjectLibrary,
   validateProjectLibrary,
 } from "../lib/projects.ts";
 import {
@@ -23,6 +26,52 @@ function completeProject() {
     storyboard: createMockStoryboard(SCRIPT),
   };
 }
+
+test("browser-local project library saves and restores validated drafts", () => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem(key: string) { return values.get(key) ?? null; },
+    setItem(key: string, value: string) { values.set(key, value); },
+  };
+  assert.deepEqual(loadProjectLibrary(storage), { ok: true, value: null });
+
+  const project = completeProject();
+  const library = { version: 1 as const, activeProjectId: project.id, projects: [project] };
+  assert.equal(saveProjectLibrary(storage, library).ok, true);
+  assert.ok(values.get(PROJECT_LIBRARY_STORAGE_KEY)?.includes("测试项目"));
+
+  const restored = loadProjectLibrary(storage);
+  assert.equal(restored.ok, true);
+  if (!restored.ok || !restored.value) return;
+  assert.equal(restored.value.activeProjectId, project.id);
+  assert.equal(restored.value.projects[0].storyboard?.shots.length, 6);
+});
+
+test("browser-local project library reports corrupted or unwritable storage", () => {
+  const corrupted = {
+    getItem() { return "not-json"; },
+    setItem() {},
+  };
+  assert.deepEqual(loadProjectLibrary(corrupted), {
+    ok: false,
+    error: "本地草稿数据已损坏，无法恢复。",
+  });
+
+  const project = completeProject();
+  const unwritable = {
+    getItem() { return null; },
+    setItem() { throw new Error("quota"); },
+  };
+  const result = saveProjectLibrary(unwritable, {
+    version: 1,
+    activeProjectId: project.id,
+    projects: [project],
+  });
+  assert.deepEqual(result, {
+    ok: false,
+    error: "浏览器本地存储写入失败，请导出 JSON 备份。",
+  });
+});
 
 test("project JSON backup round-trips all current editable assets", () => {
   const project = completeProject();

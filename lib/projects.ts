@@ -29,6 +29,11 @@ export type ProjectValidationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
 
+export interface ProjectStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -111,6 +116,42 @@ export function validateProjectLibrary(value: unknown): ProjectValidationResult<
       projects,
     },
   };
+}
+
+export function loadProjectLibrary(storage: ProjectStorage): ProjectValidationResult<ProjectLibrary | null> {
+  let saved: string | null;
+  try {
+    saved = storage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
+  } catch {
+    return { ok: false, error: "读取本地草稿失败，请检查浏览器存储权限。" };
+  }
+  if (!saved) {
+    return { ok: true, value: null };
+  }
+
+  let value: unknown;
+  try {
+    value = JSON.parse(saved);
+  } catch {
+    return { ok: false, error: "本地草稿数据已损坏，无法恢复。" };
+  }
+  return validateProjectLibrary(value);
+}
+
+export function saveProjectLibrary(
+  storage: ProjectStorage,
+  library: ProjectLibrary,
+): ProjectValidationResult<ProjectLibrary> {
+  const validation = validateProjectLibrary(library);
+  if (!validation.ok) {
+    return validation;
+  }
+  try {
+    storage.setItem(PROJECT_LIBRARY_STORAGE_KEY, JSON.stringify(validation.value));
+  } catch {
+    return { ok: false, error: "浏览器本地存储写入失败，请导出 JSON 备份。" };
+  }
+  return validation;
 }
 
 export function createProjectBackup(project: LocalProjectDraft, exportedAt = new Date().toISOString()) {
