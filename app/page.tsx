@@ -2,33 +2,82 @@
 
 import { useState } from "react";
 import {
-  createMockStoryboard,
   FRAMING_OPTIONS,
   SAMPLE_SCRIPT,
   type Shot,
   type Storyboard,
 } from "@/lib/storyboard";
 
+function errorMessageFrom(payload: unknown) {
+  if (payload && typeof payload === "object" && typeof (payload as { error?: unknown }).error === "string") {
+    return (payload as { error: string }).error;
+  }
+
+  return "生成失败，请稍后重试。";
+}
+
+function isStoryboard(payload: unknown): payload is Storyboard {
+  if (!payload || typeof payload !== "object") return false;
+
+  const value = payload as Partial<Storyboard>;
+  return typeof value.title === "string"
+    && typeof value.sourceScript === "string"
+    && Array.isArray(value.characters)
+    && Array.isArray(value.scenes)
+    && Array.isArray(value.shots);
+}
+
 export default function Home() {
   const [script, setScript] = useState("");
   const [notice, setNotice] = useState("");
+  const [isError, setIsError] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
   const [storyboard, setStoryboard] = useState<Storyboard | null>(null);
   const [hasExported, setHasExported] = useState(false);
 
   function loadSample() {
     setScript(SAMPLE_SCRIPT);
     setNotice("");
+    setIsError(false);
   }
 
-  function handleGenerate() {
+  async function handleGenerate() {
     if (script.trim().length < 50) {
       setNotice("脚本太短了，请至少输入 50 个字。");
+      setIsError(true);
       return;
     }
 
-    setStoryboard(createMockStoryboard(script));
-    setNotice("已用本地模拟规则生成分镜，你可以继续编辑镜头卡。");
-    window.setTimeout(() => document.querySelector("#storyboard")?.scrollIntoView({ behavior: "smooth" }), 80);
+    setIsGenerating(true);
+    setIsError(false);
+    setNotice("");
+
+    try {
+      const response = await fetch("/api/generate-storyboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ script }),
+      });
+      const payload: unknown = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(errorMessageFrom(payload));
+      }
+
+      if (!isStoryboard(payload)) {
+        throw new Error("生成结果格式不正确，请稍后重试。");
+      }
+
+      setStoryboard(payload);
+      setHasExported(false);
+      setNotice("分镜已生成，你可以继续编辑镜头卡。");
+      window.setTimeout(() => document.querySelector("#storyboard")?.scrollIntoView({ behavior: "smooth" }), 80);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "生成失败，请稍后重试。");
+      setIsError(true);
+    } finally {
+      setIsGenerating(false);
+    }
   }
 
   function updateShot<K extends "framing" | "action" | "emotion">(id: number, field: K, value: Shot[K]) {
@@ -132,6 +181,7 @@ ${shotMarkdown}
             onChange={(event) => {
               setScript(event.target.value);
               setNotice("");
+              setIsError(false);
             }}
             placeholder={"在这里粘贴你的故事…\n\n例如：\n夜。天台。\n林夏站在边缘，手里紧握着一封信…"}
           />
@@ -139,11 +189,11 @@ ${shotMarkdown}
         </div>
 
         <div className="workspace-foot">
-          <p className={notice.includes("请先") ? "notice error" : "notice"} aria-live="polite">
+          <p className={isError ? "notice error" : "notice"} aria-live="polite">
             {notice || "内容仅在本地浏览器中处理，不会上传。"}
           </p>
-          <button className="generate-button" type="button" onClick={handleGenerate}>
-            生成分镜 <span aria-hidden="true">→</span>
+          <button className="generate-button" type="button" onClick={handleGenerate} disabled={isGenerating}>
+            {isGenerating ? "生成中…" : <>生成分镜 <span aria-hidden="true">→</span></>}
           </button>
         </div>
       </section>

@@ -4,16 +4,24 @@ import test from "node:test";
 
 const projectRoot = new URL("../", import.meta.url);
 
-async function render() {
+const VALID_SCRIPT = `《接口测试》
+
+这是一段足够长的测试短剧脚本，用来验证页面提交 JSON 后，服务端能够接收脚本文本、生成符合故事板契约的结果，并将它安全地返回给前端页面。`;
+
+async function request(path, init = {}) {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", { headers: { accept: "text/html" } }),
+    new Request(`http://localhost${path}`, init),
     { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } },
     { waitUntil() {}, passThroughOnException() {} },
   );
+}
+
+async function render() {
+  return request("/", { headers: { accept: "text/html" } });
 }
 
 test("server-renders the storyboard input experience", async () => {
@@ -30,6 +38,31 @@ test("server-renders the storyboard input experience", async () => {
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/);
 });
 
+test("POST /api/generate-storyboard returns a Storyboard and validates input", async () => {
+  const response = await request("/api/generate-storyboard", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ script: VALID_SCRIPT }),
+  });
+
+  assert.equal(response.status, 200);
+  const storyboard = await response.json();
+  assert.equal(storyboard.title, "接口测试");
+  assert.equal(storyboard.sourceScript, VALID_SCRIPT);
+  assert.equal(storyboard.characters.length, 2);
+  assert.equal(storyboard.scenes.length, 2);
+  assert.equal(storyboard.shots.length, 6);
+
+  const invalidResponse = await request("/api/generate-storyboard", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ script: "太短" }),
+  });
+
+  assert.equal(invalidResponse.status, 400);
+  assert.deepEqual(await invalidResponse.json(), { error: "脚本太短了，请至少输入 50 个字。" });
+});
+
 test("source contains the complete local MVP interactions and shared storyboard contract", async () => {
   const [page, packageJson, storyboard] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
@@ -41,7 +74,11 @@ test("source contains the complete local MVP interactions and shared storyboard 
   assert.doesNotMatch(page, /const INITIAL_SHOTS|type Shot =/);
   assert.match(page, /if \(script\.trim\(\)\.length < 50\)/);
   assert.match(page, /脚本太短了，请至少输入 50 个字。/);
-  assert.match(page, /setStoryboard\(createMockStoryboard\(script\)\)/);
+  assert.doesNotMatch(page, /createMockStoryboard/);
+  assert.match(page, /fetch\("\/api\/generate-storyboard"/);
+  assert.match(page, /isGenerating/);
+  assert.match(page, /生成中…/);
+  assert.match(page, /isError/);
   assert.match(page, /updateShot/);
   assert.match(page, /storyboard\.characters\.map/);
   assert.match(page, /storyboard\.scenes\.map/);
