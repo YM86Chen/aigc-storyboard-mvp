@@ -30,20 +30,31 @@ test("server-renders the storyboard input experience", async () => {
   assert.doesNotMatch(html, /codex-preview|SkeletonPreview|react-loading-skeleton/);
 });
 
-test("source contains the complete local MVP interactions", async () => {
-  const [page, packageJson] = await Promise.all([
+test("source contains the complete local MVP interactions and shared storyboard contract", async () => {
+  const [page, packageJson, storyboard] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../lib/storyboard.ts", import.meta.url), "utf8"),
   ]);
 
-  assert.match(page, /const SAMPLE_SCRIPT/);
+  assert.match(page, /from "@\/lib\/storyboard"/);
+  assert.doesNotMatch(page, /const INITIAL_SHOTS|type Shot =/);
   assert.match(page, /if \(script\.trim\(\)\.length < 50\)/);
   assert.match(page, /脚本太短了，请至少输入 50 个字。/);
-  assert.equal((page.match(/\{ id: [1-6], framing:/g) ?? []).length, 6);
+  assert.match(page, /setStoryboard\(createMockStoryboard\(script\)\)/);
   assert.match(page, /updateShot/);
-  assert.match(page, /field: keyof Omit<Shot/);
+  assert.match(page, /storyboard\.characters\.map/);
+  assert.match(page, /storyboard\.scenes\.map/);
+  assert.match(page, /storyboard\.shots\.map/);
   assert.match(page, /new Blob\(\[markdown\]/);
-  assert.match(page, /link\.download = `\$\{title\}-分镜资产包\.md`/);
+  assert.match(page, /link\.download = `\$\{storyboard\.title\}-分镜资产包\.md`/);
+
+  for (const typeName of ["Storyboard", "Character", "Scene", "Shot"]) {
+    assert.match(storyboard, new RegExp(`export interface ${typeName}`));
+  }
+  assert.match(storyboard, /export function createMockStoryboard/);
+  assert.match(storyboard, /const FRAMING_OPTIONS/);
+  assert.equal((storyboard.match(/sceneId: "s0[12]"/g) ?? []).length, 6);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
 
   await assert.rejects(access(new URL("../app/_sites-preview/SkeletonPreview.tsx", import.meta.url)));

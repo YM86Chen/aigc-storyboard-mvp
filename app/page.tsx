@@ -1,39 +1,18 @@
 "use client";
 
 import { useState } from "react";
-
-type Shot = {
-  id: number;
-  framing: string;
-  action: string;
-  emotion: string;
-  visual: string;
-};
-
-const SAMPLE_SCRIPT = `《最后一班地铁》
-
-深夜，林夏独自坐在空荡的末班地铁里。车窗外一片漆黑，手机忽然收到一条陌生短信：“不要在下一站下车。”
-
-广播响起：“终点站，到了。”林夏抬头，却发现对面不知何时坐着一个穿旧式制服的女孩。
-
-女孩看着她，轻声说：“你终于回来了。”
-
-车门缓缓打开，站台上站满了沉默的人影。林夏握紧手机，屏幕上又出现一行字：“现在，假装你认识她。”`;
-
-const INITIAL_SHOTS: Shot[] = [
-  { id: 1, framing: "远景", action: "林夏独自坐在空荡的末班地铁里", emotion: "孤独、警觉", visual: "深夜车厢，冷白灯闪烁，窗外漆黑" },
-  { id: 2, framing: "特写", action: "手机屏幕亮起，收到陌生短信", emotion: "意外、紧张", visual: "手指握紧手机，短信写着不要下车" },
-  { id: 3, framing: "中景", action: "林夏抬头，看见对面的制服女孩", emotion: "错愕、戒备", visual: "两人隔着过道对坐，空间压迫而安静" },
-  { id: 4, framing: "近景", action: "女孩注视林夏，轻声开口", emotion: "平静、诡异", visual: "旧式制服女孩半张脸藏在阴影中" },
-  { id: 5, framing: "全景", action: "车门打开，站台人影同时望来", emotion: "恐惧、窒息", visual: "昏暗站台挤满沉默人影，车门形成画框" },
-  { id: 6, framing: "大特写", action: "林夏再次看向手机，强装镇定", emotion: "惊恐、克制", visual: "眼睛与手机屏幕交叠，屏幕提示假装认识她" },
-];
+import {
+  createMockStoryboard,
+  FRAMING_OPTIONS,
+  SAMPLE_SCRIPT,
+  type Shot,
+  type Storyboard,
+} from "@/lib/storyboard";
 
 export default function Home() {
   const [script, setScript] = useState("");
   const [notice, setNotice] = useState("");
-  const [hasGenerated, setHasGenerated] = useState(false);
-  const [shots, setShots] = useState(INITIAL_SHOTS);
+  const [storyboard, setStoryboard] = useState<Storyboard | null>(null);
   const [hasExported, setHasExported] = useState(false);
 
   function loadSample() {
@@ -47,19 +26,23 @@ export default function Home() {
       return;
     }
 
-    setHasGenerated(true);
+    setStoryboard(createMockStoryboard(script));
     setNotice("已用本地模拟规则生成分镜，你可以继续编辑镜头卡。");
     window.setTimeout(() => document.querySelector("#storyboard")?.scrollIntoView({ behavior: "smooth" }), 80);
   }
 
-  function updateShot(id: number, field: keyof Omit<Shot, "id" | "visual">, value: string) {
-    setShots((current) => current.map((shot) => shot.id === id ? { ...shot, [field]: value } : shot));
+  function updateShot<K extends "framing" | "action" | "emotion">(id: number, field: K, value: Shot[K]) {
+    setStoryboard((current) => current && {
+      ...current,
+      shots: current.shots.map((shot) => shot.id === id ? { ...shot, [field]: value } : shot),
+    });
     setHasExported(false);
   }
 
   function exportMarkdown() {
-    const title = script.split("\n").find((line) => line.trim())?.replace(/[《》#]/g, "").trim() || "短剧故事板";
-    const shotMarkdown = shots.map((shot) => `### 镜头 ${String(shot.id).padStart(2, "0")}
+    if (!storyboard) return;
+
+    const shotMarkdown = storyboard.shots.map((shot) => `### 镜头 ${String(shot.id).padStart(2, "0")}
 
 - **景别：** ${shot.framing}
 - **动作：** ${shot.action}
@@ -67,33 +50,28 @@ export default function Home() {
 - **画面提示词：** ${shot.visual}
 - **图生视频建议：** 保持角色与场景一致，突出“${shot.action}”，情绪为“${shot.emotion}”。`).join("\n\n");
 
-    const markdown = `# ${title} · 分镜资产包
+    const characterMarkdown = storyboard.characters.map((character) => `### ${character.name}
+- **身份：** ${character.role}
+- **设定：** ${character.description}`).join("\n\n");
+
+    const sceneMarkdown = storyboard.scenes.map((scene) => `### ${scene.id.toUpperCase()} · ${scene.name}
+${scene.description}`).join("\n\n");
+
+    const markdown = `# ${storyboard.title} · 分镜资产包
 
 > 由帧语本地 MVP 生成，可复制到即梦、可灵或 Seedance 工作流中继续使用。
 
 ## 原始脚本
 
-${script.trim()}
+${storyboard.sourceScript.trim()}
 
 ## 角色设定
 
-### 林夏
-- **身份：** 主角，25 岁的普通上班族
-- **外观：** 短发、浅灰风衣
-- **人物状态：** 被意外卷入末班地铁的秘密
-
-### 制服女孩
-- **身份：** 神秘人，约 18 岁
-- **外观：** 旧式深蓝制服、脸色苍白
-- **人物状态：** 似乎早已认识林夏
+${characterMarkdown}
 
 ## 场景设定
 
-### S01 · 末班地铁车厢
-深夜，内景，冷白荧光灯，空旷压抑，现代都市悬疑。
-
-### S02 · 废弃终点站台
-深夜，暗绿色顶灯，潮湿雾气，密集沉默人影。
+${sceneMarkdown}
 
 ## 镜头清单
 
@@ -108,7 +86,7 @@ ${shotMarkdown}
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${title}-分镜资产包.md`;
+    link.download = `${storyboard.title}-分镜资产包.md`;
     document.body.appendChild(link);
     link.click();
     link.remove();
@@ -170,7 +148,7 @@ ${shotMarkdown}
         </div>
       </section>
 
-      {hasGenerated && (
+      {storyboard && (
         <section className="results" id="storyboard" aria-labelledby="result-title">
           <div className="result-heading">
             <div>
@@ -179,7 +157,7 @@ ${shotMarkdown}
               <p>先检查角色与场景是否一致，再逐镜调整景别、动作和情绪。</p>
             </div>
             <div className="result-actions">
-              <span className="result-count">2 角色 · 2 场景 · 6 镜头</span>
+              <span className="result-count">{storyboard.characters.length} 角色 · {storyboard.scenes.length} 场景 · {storyboard.shots.length} 镜头</span>
               <button className="export-button" type="button" onClick={exportMarkdown}>
                 {hasExported ? "已导出 Markdown ✓" : "导出 Markdown ↓"}
               </button>
@@ -189,37 +167,32 @@ ${shotMarkdown}
           <div className="asset-section">
             <div className="section-label"><span>CAST</span><h3>角色卡</h3></div>
             <div className="character-grid">
-              <article className="character-card">
-                <div className="character-avatar orange">林</div>
-                <div><h4>林夏</h4><p>25 岁，短发，浅灰风衣；普通上班族，被意外卷入末班地铁的秘密。</p></div>
-                <span className="tag">主角</span>
-              </article>
-              <article className="character-card">
-                <div className="character-avatar dark">影</div>
-                <div><h4>制服女孩</h4><p>约 18 岁，旧式深蓝制服，脸色苍白；似乎早已认识林夏。</p></div>
-                <span className="tag">神秘人</span>
-              </article>
+              {storyboard.characters.map((character) => (
+                <article className="character-card" key={character.id}>
+                  <div className={`character-avatar ${character.avatarTone}`}>{character.avatarLabel}</div>
+                  <div><h4>{character.name}</h4><p>{character.description}</p></div>
+                  <span className="tag">{character.role}</span>
+                </article>
+              ))}
             </div>
           </div>
 
           <div className="asset-section">
             <div className="section-label"><span>SCENE</span><h3>场景卡</h3></div>
             <div className="scene-grid">
-              <article className="scene-card">
-                <span className="scene-index">S01</span>
-                <div><h4>末班地铁车厢</h4><p>深夜 · 内景 · 冷白荧光灯 · 空旷压抑 · 现代都市悬疑</p></div>
-              </article>
-              <article className="scene-card">
-                <span className="scene-index">S02</span>
-                <div><h4>废弃终点站台</h4><p>深夜 · 外景感 · 暗绿色顶灯 · 潮湿雾气 · 密集沉默人影</p></div>
-              </article>
+              {storyboard.scenes.map((scene) => (
+                <article className="scene-card" key={scene.id}>
+                  <span className="scene-index">{scene.id.toUpperCase()}</span>
+                  <div><h4>{scene.name}</h4><p>{scene.description}</p></div>
+                </article>
+              ))}
             </div>
           </div>
 
           <div className="asset-section storyboard-section">
             <div className="section-label"><span>SHOTS</span><h3>6 镜头故事板</h3><p>点击字段即可编辑</p></div>
             <div className="shot-grid">
-              {shots.map((shot) => (
+              {storyboard.shots.map((shot) => (
                 <article className="shot-card" key={shot.id}>
                   <div className={`shot-preview preview-${shot.id}`}>
                     <span>SHOT {String(shot.id).padStart(2, "0")}</span>
@@ -228,8 +201,8 @@ ${shotMarkdown}
                   <div className="shot-fields">
                     <label>
                       <span>景别</span>
-                      <select value={shot.framing} onChange={(event) => updateShot(shot.id, "framing", event.target.value)}>
-                        {['远景', '全景', '中景', '近景', '特写', '大特写'].map((option) => <option key={option}>{option}</option>)}
+                      <select value={shot.framing} onChange={(event) => updateShot(shot.id, "framing", event.target.value as Shot["framing"])}>
+                        {FRAMING_OPTIONS.map((option) => <option key={option}>{option}</option>)}
                       </select>
                     </label>
                     <label>
