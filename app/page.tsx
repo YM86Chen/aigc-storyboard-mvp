@@ -190,7 +190,7 @@ ${shotMarkdown}
 
         <div className="workspace-foot">
           <p className={isError ? "notice error" : "notice"} aria-live="polite">
-            {notice || "内容仅在本地浏览器中处理，不会上传。"}
+            {notice || "点击“生成分镜”后，脚本会发送至你配置的 AI 服务，仅用于本次生成。"}
           </p>
           <button className="generate-button" type="button" onClick={handleGenerate} disabled={isGenerating}>
             {isGenerating ? "生成中…" : <>生成分镜 <span aria-hidden="true">→</span></>}
@@ -202,7 +202,7 @@ ${shotMarkdown}
         <section className="results" id="storyboard" aria-labelledby="result-title">
           <div className="result-heading">
             <div>
-              <span className="result-kicker">02 · 本地模拟生成</span>
+              <span className="result-kicker">02 · AI 生成结果</span>
               <h2 id="result-title">故事世界已经拆解完成</h2>
               <p>先检查角色与场景是否一致，再逐镜调整景别、动作和情绪。</p>
             </div>

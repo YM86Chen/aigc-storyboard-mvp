@@ -34,6 +34,12 @@ export interface Storyboard {
   shots: Shot[];
 }
 
+export type GeneratedStoryboard = Omit<Storyboard, "sourceScript">;
+
+export type StoryboardValidationResult =
+  | { ok: true; value: GeneratedStoryboard }
+  | { ok: false; error: string };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -59,42 +65,84 @@ function isScene(value: unknown): value is Scene {
     && isNonEmptyString(value.description);
 }
 
-function isShot(value: unknown): value is Shot {
-  return isRecord(value)
-    && typeof value.id === "number"
-    && Number.isInteger(value.id)
-    && isNonEmptyString(value.sceneId)
-    && typeof value.framing === "string"
-    && FRAMING_OPTIONS.includes(value.framing as ShotFraming)
-    && isNonEmptyString(value.action)
-    && isNonEmptyString(value.emotion)
-    && isNonEmptyString(value.visual);
-}
-
 function hasUniqueIds(items: Array<{ id: string | number }>) {
   return new Set(items.map((item) => item.id)).size === items.length;
 }
 
-export function isStoryboard(value: unknown, expectedSourceScript?: string): value is Storyboard {
-  if (!isRecord(value)
-    || !isNonEmptyString(value.title)
-    || !isNonEmptyString(value.sourceScript)
-    || (expectedSourceScript !== undefined && value.sourceScript !== expectedSourceScript)) {
-    return false;
+export function validateGeneratedStoryboard(value: unknown): StoryboardValidationResult {
+  if (!isRecord(value) || !isNonEmptyString(value.title)) {
+    return { ok: false, error: "模型返回的标题为空，请重试。" };
   }
 
   const { characters, scenes, shots } = value;
-  if (!Array.isArray(characters) || characters.length === 0 || !characters.every(isCharacter)
-    || !Array.isArray(scenes) || scenes.length === 0 || !scenes.every(isScene)
-    || !Array.isArray(shots) || shots.length !== 6 || !shots.every(isShot)) {
-    return false;
+  if (!Array.isArray(characters) || characters.length === 0) {
+    return { ok: false, error: "模型未返回角色信息，请重试。" };
+  }
+  if (!characters.every(isCharacter)) {
+    const index = characters.findIndex((character) => !isCharacter(character));
+    return { ok: false, error: `模型返回的第 ${index + 1} 个角色字段不完整，请重试。` };
+  }
+  const validCharacters = characters as Character[];
+  if (!hasUniqueIds(validCharacters)) {
+    return { ok: false, error: "模型返回的角色 ID 存在重复，请重试。" };
   }
 
-  const sceneIds = new Set(scenes.map((scene) => scene.id));
-  return hasUniqueIds(characters)
-    && hasUniqueIds(scenes)
-    && hasUniqueIds(shots)
-    && shots.every((shot) => sceneIds.has(shot.sceneId));
+  if (!Array.isArray(scenes) || scenes.length === 0) {
+    return { ok: false, error: "模型未返回场景信息，请重试。" };
+  }
+  if (!scenes.every(isScene)) {
+    const index = scenes.findIndex((scene) => !isScene(scene));
+    return { ok: false, error: `模型返回的第 ${index + 1} 个场景字段不完整，请重试。` };
+  }
+  const validScenes = scenes as Scene[];
+  if (!hasUniqueIds(validScenes)) {
+    return { ok: false, error: "模型返回的场景 ID 存在重复，请重试。" };
+  }
+
+  if (!Array.isArray(shots) || shots.length !== 6) {
+    return { ok: false, error: "模型必须返回恰好 6 个镜头，请重试。" };
+  }
+
+  const sceneIds = new Set(validScenes.map((scene) => scene.id));
+  for (const [index, shot] of shots.entries()) {
+    const shotNumber = index + 1;
+    if (!isRecord(shot)
+      || typeof shot.id !== "number"
+      || !Number.isInteger(shot.id)
+      || !isNonEmptyString(shot.sceneId)
+      || !isNonEmptyString(shot.action)
+      || !isNonEmptyString(shot.emotion)
+      || !isNonEmptyString(shot.visual)) {
+      return { ok: false, error: `模型返回的第 ${shotNumber} 个镜头字段不完整，请重试。` };
+    }
+    if (typeof shot.framing !== "string" || !FRAMING_OPTIONS.includes(shot.framing as ShotFraming)) {
+      return { ok: false, error: `模型返回的第 ${shotNumber} 个镜头景别无效，请重试。` };
+    }
+    if (!sceneIds.has(shot.sceneId)) {
+      return { ok: false, error: `模型返回的第 ${shotNumber} 个镜头引用了不存在的场景，请重试。` };
+    }
+  }
+
+  const validShots = shots as Shot[];
+  if (!hasUniqueIds(validShots)) {
+    return { ok: false, error: "模型返回的镜头 ID 存在重复，请重试。" };
+  }
+
+  return {
+    ok: true,
+    value: {
+      title: value.title,
+      characters: validCharacters,
+      scenes: validScenes,
+      shots: validShots,
+    },
+  };
+}
+
+export function isStoryboard(value: unknown): value is Storyboard {
+  return isRecord(value)
+    && isNonEmptyString(value.sourceScript)
+    && validateGeneratedStoryboard(value).ok;
 }
 
 export const SAMPLE_SCRIPT = `《最后一班地铁》

@@ -4,9 +4,8 @@ import { DeepSeekError, generateStoryboardWithDeepSeek } from "../lib/deepseek.t
 
 const SCRIPT = "《接口测试》这是一段足够长的短剧脚本，用来验证 DeepSeek 请求会生成符合故事板契约的 JSON，并且测试全程使用 mock fetch，不会产生任何真实模型费用。";
 
-const VALID_STORYBOARD = {
+const MODEL_STORYBOARD = {
   title: "接口测试",
-  sourceScript: SCRIPT,
   characters: [
     { id: "a", name: "角色甲", role: "主角", description: "测试角色", avatarLabel: "甲", avatarTone: "orange" },
   ],
@@ -27,22 +26,35 @@ function completionResponse(content: string) {
   return Response.json({ choices: [{ message: { content } }] });
 }
 
-test("DeepSeek request uses JSON Output and disabled thinking mode", async () => {
+test("DeepSeek request uses JSON Output and injects the trusted source script", async () => {
   let requestBody: Record<string, unknown> | undefined;
   const result = await generateStoryboardWithDeepSeek(SCRIPT, {
     apiKey: "test-key",
     fetchImpl: async (_url, init) => {
       requestBody = JSON.parse(String(init?.body));
-      return completionResponse(JSON.stringify(VALID_STORYBOARD));
+      return completionResponse(JSON.stringify(MODEL_STORYBOARD));
     },
   });
 
-  assert.deepEqual(result, VALID_STORYBOARD);
+  assert.deepEqual(result, { ...MODEL_STORYBOARD, sourceScript: SCRIPT });
   assert.equal(requestBody?.model, "deepseek-v4-pro");
   assert.deepEqual(requestBody?.response_format, { type: "json_object" });
   assert.deepEqual(requestBody?.thinking, { type: "disabled" });
   assert.equal(requestBody?.stream, false);
   assert.match(JSON.stringify(requestBody?.messages), /JSON/);
+  assert.doesNotMatch(JSON.stringify(requestBody?.messages), /sourceScript/);
+});
+
+test("DeepSeek generator ignores a model-provided sourceScript", async () => {
+  const result = await generateStoryboardWithDeepSeek(SCRIPT, {
+    apiKey: "test-key",
+    fetchImpl: async () => completionResponse(JSON.stringify({
+      ...MODEL_STORYBOARD,
+      sourceScript: "模型改写过的脚本",
+    })),
+  });
+
+  assert.equal(result.sourceScript, SCRIPT);
 });
 
 test("DeepSeek generator reports a missing API key without calling the network", async () => {
@@ -53,7 +65,7 @@ test("DeepSeek generator reports a missing API key without calling the network",
       apiKey: "",
       fetchImpl: async () => {
         called = true;
-        return completionResponse(JSON.stringify(VALID_STORYBOARD));
+        return completionResponse(JSON.stringify(MODEL_STORYBOARD));
       },
     }),
     (error: unknown) => error instanceof DeepSeekError
@@ -76,22 +88,31 @@ test("DeepSeek generator rejects invalid JSON and incomplete storyboard data", a
   }
 });
 
-test("DeepSeek generator rejects broken asset references, duplicate ids, and source mismatches", async () => {
-  const unknownScene = structuredClone(VALID_STORYBOARD);
+test("DeepSeek generator rejects broken references, duplicate ids, and invalid framing with specific safe errors", async () => {
+  const unknownScene = structuredClone(MODEL_STORYBOARD);
   unknownScene.shots[0].sceneId = "missing-scene";
 
-  const duplicateCharacter = structuredClone(VALID_STORYBOARD);
+  const duplicateCharacter = structuredClone(MODEL_STORYBOARD);
   duplicateCharacter.characters.push({ ...duplicateCharacter.characters[0] });
 
-  const duplicateScene = structuredClone(VALID_STORYBOARD);
+  const duplicateScene = structuredClone(MODEL_STORYBOARD);
   duplicateScene.scenes.push({ ...duplicateScene.scenes[0] });
 
-  const duplicateShot = structuredClone(VALID_STORYBOARD);
+  const duplicateShot = structuredClone(MODEL_STORYBOARD);
   duplicateShot.shots[5].id = duplicateShot.shots[0].id;
 
-  const mismatchedSource = { ...VALID_STORYBOARD, sourceScript: "不是用户提交的原始脚本" };
+  const invalidFraming = structuredClone(MODEL_STORYBOARD);
+  invalidFraming.shots[2].framing = "航拍";
 
-  for (const invalidStoryboard of [unknownScene, duplicateCharacter, duplicateScene, duplicateShot, mismatchedSource]) {
+  const invalidCases = [
+    [unknownScene, "模型返回的第 1 个镜头引用了不存在的场景，请重试。"],
+    [duplicateCharacter, "模型返回的角色 ID 存在重复，请重试。"],
+    [duplicateScene, "模型返回的场景 ID 存在重复，请重试。"],
+    [duplicateShot, "模型返回的镜头 ID 存在重复，请重试。"],
+    [invalidFraming, "模型返回的第 3 个镜头景别无效，请重试。"],
+  ] as const;
+
+  for (const [invalidStoryboard, expectedMessage] of invalidCases) {
     await assert.rejects(
       generateStoryboardWithDeepSeek(SCRIPT, {
         apiKey: "test-key",
@@ -99,7 +120,7 @@ test("DeepSeek generator rejects broken asset references, duplicate ids, and sou
       }),
       (error: unknown) => error instanceof DeepSeekError
         && error.status === 502
-        && error.message === "模型返回的故事板数据不完整或关联无效，请重试。",
+        && error.message === expectedMessage,
     );
   }
 });

@@ -74,6 +74,8 @@ test("source contains the complete request chain, DeepSeek boundary, and shared 
   assert.match(page, /isGenerating/);
   assert.match(page, /生成中…/);
   assert.match(page, /isError/);
+  assert.match(page, /脚本会发送至你配置的 AI 服务，仅用于本次生成。/);
+  assert.match(page, /02 · AI 生成结果/);
   assert.match(page, /updateShot/);
   assert.match(page, /storyboard\.characters\.map/);
   assert.match(page, /storyboard\.scenes\.map/);
@@ -85,7 +87,7 @@ test("source contains the complete request chain, DeepSeek boundary, and shared 
     assert.match(storyboard, new RegExp(`export interface ${typeName}`));
   }
   assert.match(storyboard, /export function createMockStoryboard/);
-  assert.match(storyboard, /export function isStoryboard/);
+  assert.match(storyboard, /export function validateGeneratedStoryboard/);
   assert.match(storyboard, /const FRAMING_OPTIONS/);
   assert.equal((storyboard.match(/sceneId: "s0[12]"/g) ?? []).length, 6);
   assert.match(route, /generateStoryboardWithDeepSeek/);
