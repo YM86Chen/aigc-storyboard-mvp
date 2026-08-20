@@ -121,6 +121,9 @@ test("source contains the complete request chain, local workspace, and shared st
   assert.match(page, /待检查 · 手动保护/);
   assert.match(page, /复制整套提示词/);
   assert.match(page, /镜头导航/);
+  assert.match(page, /className="shot-tabs" role="group" aria-label="选择镜头"/);
+  assert.match(page, /aria-pressed=\{index === activeShotIndex\}/);
+  assert.doesNotMatch(page, /role="tablist"|role="tab"|aria-selected=/);
   assert.match(page, /上一个/);
   assert.match(page, /下一个/);
   assert.match(page, /window\.confirm\(`确定删除/);

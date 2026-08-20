@@ -126,6 +126,24 @@ function downloadText(filename: string, text: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
+async function writeClipboardText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    const fallback = document.createElement("textarea");
+    fallback.value = text;
+    fallback.setAttribute("readonly", "");
+    fallback.style.position = "fixed";
+    fallback.style.opacity = "0";
+    document.body.appendChild(fallback);
+    fallback.select();
+    const copied = document.execCommand("copy");
+    fallback.remove();
+    if (!copied) throw new Error("clipboard");
+  }
+}
+
 function promptState(shot: Shot) {
   if (shot.videoPromptSource === "manual") {
     return shot.videoPromptNeedsRebuild
@@ -170,6 +188,8 @@ export default function Home() {
   const script = activeProject?.script ?? "";
   const staleGeneratedPromptCount = storyboard?.shots.filter((shot) => shot.videoPromptNeedsRebuild && shot.videoPromptSource === "generated").length ?? 0;
   const staleManualPromptCount = storyboard?.shots.filter((shot) => shot.videoPromptNeedsRebuild && shot.videoPromptSource === "manual").length ?? 0;
+  const isSaving = saveStatus.includes("正在") || saveStatus.includes("等待") || saveStatus.includes("保存到当前浏览器中");
+  const workspaceReady = session.status === "authenticated" || Boolean(storyboard);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -634,7 +654,7 @@ export default function Home() {
 
   async function copyVideoPrompt(prompt: string, shotNumber: number) {
     try {
-      await navigator.clipboard.writeText(prompt);
+      await writeClipboardText(prompt);
       showNotice(`镜头 ${shotNumber} 的图生视频提示词已复制。`);
     } catch {
       showNotice("复制失败，请手动选中提示词后复制。", true);
@@ -644,7 +664,7 @@ export default function Home() {
   async function copyAllVideoPrompts() {
     if (!storyboard) return;
     try {
-      await navigator.clipboard.writeText(createAllVideoPromptsText(storyboard));
+      await writeClipboardText(createAllVideoPromptsText(storyboard));
       showNotice("6 条图生视频提示词已整套复制，并包含场景与角色关联。");
     } catch {
       showNotice("整套复制失败，请使用 Markdown 导出或逐条复制。", true);
@@ -733,6 +753,24 @@ export default function Home() {
     }
   }
 
+  const scriptEditor = (
+    <>
+      <div className="editor-wrap">
+        <textarea aria-label="短剧脚本" value={script} disabled={!activeProject} onChange={(event) => updateScript(event.target.value)} placeholder={isHydrated ? "在这里粘贴你的故事…" : "正在恢复本地项目…"} />
+        <span className={`counter ${script.length > MAX_SCRIPT_LENGTH ? "over-limit" : ""}`}>{script.length} / {MAX_SCRIPT_LENGTH} 字</span>
+      </div>
+      <div className="workspace-foot">
+        <div className="notice-stack">
+          <p className={isError ? "notice error" : "notice"} aria-live="polite">{notice || "点击生成后，脚本会发送至你配置的 AI 服务，仅用于本次生成。"}</p>
+          <p className="local-note">{session.status === "authenticated"
+            ? "云端数据库是当前项目的权威来源；本地草稿仅作为迁移来源保留。"
+            : "当前使用浏览器本地草稿；登录前不会自动上传任何内容。"}</p>
+        </div>
+        <button className="generate-button" type="button" onClick={handleGenerate} disabled={isGenerating || !activeProject || session.status !== "authenticated"}>{session.status === "anonymous" ? "登录后生成" : isGenerating ? "生成中…" : <>生成分镜 <span aria-hidden="true">→</span></>}</button>
+      </div>
+    </>
+  );
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -751,27 +789,30 @@ export default function Home() {
       </header>
 
       <section className="project-shelf" aria-label={session.status === "authenticated" ? "云端项目管理" : "本地项目管理"}>
-        <div className="project-switcher">
-          <label htmlFor="project-select">{session.status === "authenticated" ? "云端项目" : "当前项目"}</label>
-          <select id="project-select" value={library?.activeProjectId ?? ""} disabled={!library || library.projects.length === 0} onChange={(event) => {
-            setLibrary((current) => current ? { ...current, activeProjectId: event.target.value } : current);
-            setActiveShotIndex(0);
-            showNotice(session.status === "authenticated" ? "已切换云端项目。" : "已切换本地项目。");
-          }}>
-            {library?.projects.length === 0 && <option value="">暂无云端项目</option>}
-            {library?.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-          </select>
-          <button type="button" onClick={() => void createProject()} disabled={session.status === "loading"}>+新建</button>
-          <button type="button" onClick={renameProject} disabled={!activeProject}>重命名</button>
-          <button className="danger-text" type="button" onClick={() => void deleteProject()} disabled={!activeProject}>删除</button>
+        <div className="project-primary">
+          <div className="project-switcher">
+            <label htmlFor="project-select"><span>{session.status === "authenticated" ? "云端项目" : "当前项目"}</span><small>{library?.projects.length ?? 0} 个项目</small></label>
+            <select id="project-select" value={library?.activeProjectId ?? ""} disabled={!library || library.projects.length === 0} onChange={(event) => {
+              setLibrary((current) => current ? { ...current, activeProjectId: event.target.value } : current);
+              setActiveShotIndex(0);
+              showNotice(session.status === "authenticated" ? "已切换云端项目。" : "已切换本地项目。");
+            }}>
+              {library?.projects.length === 0 && <option value="">暂无云端项目</option>}
+              {library?.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+            </select>
+          </div>
+          <div className="project-actions" aria-label="项目操作">
+            <button className="project-create" type="button" onClick={() => void createProject()} disabled={session.status === "loading"}>＋ 新建</button>
+            <button type="button" onClick={renameProject} disabled={!activeProject}>重命名</button>
+            <button className="danger-text" type="button" onClick={() => void deleteProject()} disabled={!activeProject}>删除</button>
+          </div>
         </div>
         <div className="backup-actions">
-          <span className={`save-status ${cloudIssue ? `status-${cloudIssue}` : ""}`} aria-live="polite"><i />{saveStatus}</span>
+          <span className={`save-status ${isSaving ? "status-saving" : ""} ${cloudIssue ? `status-${cloudIssue}` : ""}`} aria-live="polite"><i />{saveStatus}</span>
           {cloudIssue === "failed" && <button type="button" onClick={retryCloudSave}>重试保存</button>}
           {cloudIssue === "conflict" && <button type="button" onClick={() => void loadLatestCloudProject()}>加载云端最新版</button>}
           <input ref={importInputRef} className="visually-hidden" type="file" accept="application/json,.json" aria-label="导入 JSON 项目备份" onChange={(event) => void importJson(event.target.files?.[0])} />
-          <button type="button" onClick={() => importInputRef.current?.click()}>导入 JSON</button>
-          <button type="button" onClick={exportJson} disabled={!activeProject}>导出 JSON</button>
+          <div className="backup-buttons"><button type="button" onClick={() => importInputRef.current?.click()}>导入 JSON</button><button type="button" onClick={exportJson} disabled={!activeProject}>导出 JSON</button></div>
         </div>
       </section>
 
@@ -794,42 +835,57 @@ export default function Home() {
         </aside>
       )}
 
-      <section className="hero" id="top">
-        <div className="eyebrow">• AI 短剧故事板工作台</div>
-        <h1>把脚本，变成<br /><em>可拍的每一帧</em></h1>
-        <p className="intro">粘贴短剧脚本，拆解角色、场景和镜头，<br className="desktop-break" />登录后安全保存云端，在不同设备继续创作。</p>
+      <section className={`hero ${workspaceReady ? "hero-project" : ""}`} id="top">
+        {workspaceReady ? (
+          <>
+            <div className="project-hero-copy">
+              <div className="eyebrow">CURRENT PROJECT · 当前创作</div>
+              <h1>{storyboard?.title || activeProject?.name || "开始你的第一块故事板"}</h1>
+              <p className="intro">{storyboard
+                ? `${storyboard.shots.length} 个镜头已进入编辑台，当前停在镜头 ${activeShotIndex + 1}。`
+                : "整理脚本、生成故事板，再进入镜头与提示词编辑。"}</p>
+              <div className="project-facts" aria-label="当前项目状态">
+                <span><i className="fact-dot" />{session.status === "authenticated" ? "云端项目" : "本地安全样例"}</span>
+                <span>{script.length} 字脚本</span>
+                <span>{storyboard ? `${staleGeneratedPromptCount + staleManualPromptCount} 条提示词待处理` : "等待生成"}</span>
+              </div>
+            </div>
+            <div className="project-hero-action">
+              <span className="hero-action-label">NEXT ACTION</span>
+              <a className="continue-button" href={storyboard ? "#shot-editor" : "#script-editor"}>{storyboard ? `继续编辑镜头 ${String(activeShotIndex + 1).padStart(2, "0")}` : "继续编辑脚本"}<span aria-hidden="true">↘</span></a>
+              <small>{storyboard ? "镜头状态、提示词与导出都在下方编辑台" : "建议先完善人物、对话和场景信息"}</small>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="eyebrow">• AI 短剧故事板工作台</div>
+            <h1>把脚本，变成<br /><em>可拍的每一帧</em></h1>
+            <p className="intro">粘贴短剧脚本，拆解角色、场景和镜头，<br className="desktop-break" />登录后安全保存云端，在不同设备继续创作。</p>
+          </>
+        )}
       </section>
 
-      <section className="workspace" aria-labelledby="script-title">
+      <section className={`workspace ${storyboard ? "workspace-compact" : ""}`} id="script-editor" aria-labelledby="script-title">
         <div className="workspace-head">
-          <div><span className="step-number">01</span><div><h2 id="script-title">编辑短剧脚本</h2><p>建议 300–1500 字，包含人物、对话和场景信息</p></div></div>
-          <button className="sample-button" type="button" onClick={loadSample}><span aria-hidden="true">◇</span> 使用示例脚本</button>
-        </div>
-        <div className="editor-wrap">
-          <textarea aria-label="短剧脚本" value={script} disabled={!activeProject} onChange={(event) => updateScript(event.target.value)} placeholder={isHydrated ? "在这里粘贴你的故事…" : "正在恢复本地项目…"} />
-          <span className={`counter ${script.length > MAX_SCRIPT_LENGTH ? "over-limit" : ""}`}>{script.length} / {MAX_SCRIPT_LENGTH} 字</span>
-        </div>
-        <div className="workspace-foot">
-          <div className="notice-stack">
-            <p className={isError ? "notice error" : "notice"} aria-live="polite">{notice || "点击生成后，脚本会发送至你配置的 AI 服务，仅用于本次生成。"}</p>
-            <p className="local-note">{session.status === "authenticated"
-              ? "云端数据库是当前项目的权威来源；本地草稿仅作为迁移来源保留。"
-              : "当前使用浏览器本地草稿；登录前不会自动上传任何内容。"}</p>
+          <div><span className="step-number">01</span><div><h2 id="script-title">脚本与生成</h2><p>{storyboard ? "脚本已生成故事板；仍可展开修改或重新生成" : "建议 300–1500 字，包含人物、对话和场景信息"}</p></div></div>
+          <div className="workspace-head-actions">
+            {storyboard && <a href="#shot-editor">前往镜头编辑 <span aria-hidden="true">→</span></a>}
+            <button className="sample-button" type="button" onClick={loadSample}><span aria-hidden="true">◇</span> 使用示例脚本</button>
           </div>
-          <button className="generate-button" type="button" onClick={handleGenerate} disabled={isGenerating || !activeProject || session.status !== "authenticated"}>{session.status === "anonymous" ? "登录后生成" : isGenerating ? "生成中…" : <>生成分镜 <span aria-hidden="true">→</span></>}</button>
         </div>
+        {storyboard ? <details className="script-disclosure"><summary><span>查看与编辑当前脚本</span><small>{script.length} 字 · 展开后可重新生成</small></summary>{scriptEditor}</details> : scriptEditor}
       </section>
 
       {storyboard && (
         <section className="results" id="storyboard" aria-labelledby="result-title">
           <div className="result-heading">
             <div className="result-title-block">
-              <span className="result-kicker">02 · AI 生成结果</span>
+              <span className="result-kicker">02 · AI 生成结果 / STORYBOARD DESK</span>
               <input id="result-title" className="storyboard-title-input" aria-label="故事板标题" value={storyboard.title} onChange={(event) => updateStoryboard((current) => ({ ...current, title: event.target.value }))} />
-              <p>角色、场景和镜头的修改不会静默覆盖你已编辑的提示词。</p>
+              <p>资产设定、镜头调度与可交付提示词，在同一条创作节奏中完成。</p>
             </div>
             <div className="result-actions">
-              <span className="result-count">{storyboard.characters.length} 角色 · {storyboard.scenes.length} 场景 · {storyboard.shots.length} 镜头</span>
+              <span className="result-count"><b>{storyboard.shots.length}</b> 镜头 <i /> {storyboard.characters.length} 角色 <i /> {storyboard.scenes.length} 场景</span>
               <button className="secondary-action" type="button" onClick={() => void copyAllVideoPrompts()}>复制整套提示词</button>
               <button className="secondary-action" type="button" onClick={rebuildPrompts} disabled={staleGeneratedPromptCount === 0 && staleManualPromptCount === 0}>
                 {staleGeneratedPromptCount > 0 ? `重建 ${staleGeneratedPromptCount} 条待更新提示词` : "按当前资产重建提示词"}
@@ -838,49 +894,50 @@ export default function Home() {
             </div>
           </div>
           <div className="prompt-summary" aria-live="polite">
-            <strong>{staleGeneratedPromptCount + staleManualPromptCount === 0 ? "提示词已全部同步" : `${staleGeneratedPromptCount + staleManualPromptCount} 条提示词需要处理`}</strong>
+            <div className="prompt-summary-status"><i /><div><small>PROMPT STATUS</small><strong>{staleGeneratedPromptCount + staleManualPromptCount === 0 ? "提示词已全部同步" : `${staleGeneratedPromptCount + staleManualPromptCount} 条提示词需要处理`}</strong></div></div>
             <span>{staleGeneratedPromptCount > 0 ? `${staleGeneratedPromptCount} 条可批量重建` : "没有待批量重建项"}{staleManualPromptCount > 0 ? ` · ${staleManualPromptCount} 条手动提示词受保护，需逐条确认` : " · 手动提示词不会被静默覆盖"}</span>
           </div>
 
-          <div className="asset-section">
-            <div className="section-label"><span>CAST</span><h3>角色卡</h3><p>名称、身份和外观设定均可编辑</p></div>
-            <div className="character-grid">
-              {storyboard.characters.map((character) => (
-                <article className="character-card editable-card" key={character.id}>
-                  <div className={`character-avatar ${character.avatarTone}`}>{character.avatarLabel}</div>
-                  <div className="card-edit-fields">
-                    <input aria-label={`${character.name}名称`} value={character.name} onChange={(event) => updateCharacter(character.id, "name", event.target.value)} />
-                    <input aria-label={`${character.name}身份`} value={character.role} onChange={(event) => updateCharacter(character.id, "role", event.target.value)} />
-                    <textarea aria-label={`${character.name}角色设定`} value={character.description} onChange={(event) => updateCharacter(character.id, "description", event.target.value)} />
-                  </div>
-                </article>
-              ))}
+          <div className="asset-overview-grid">
+            <div className="asset-section cast-section">
+              <div className="section-label"><span>CAST</span><h3>角色设定</h3><p>角色一致性会影响全部镜头</p></div>
+              <div className="character-grid">
+                {storyboard.characters.map((character) => (
+                  <article className="character-card editable-card" key={character.id}>
+                    <div className={`character-avatar ${character.avatarTone}`}>{character.avatarLabel}</div>
+                    <div className="card-edit-fields">
+                      <input aria-label={`${character.name}名称`} value={character.name} onChange={(event) => updateCharacter(character.id, "name", event.target.value)} />
+                      <input aria-label={`${character.name}身份`} value={character.role} onChange={(event) => updateCharacter(character.id, "role", event.target.value)} />
+                      <textarea aria-label={`${character.name}角色设定`} value={character.description} onChange={(event) => updateCharacter(character.id, "description", event.target.value)} />
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
-          </div>
-
-          <div className="asset-section">
-            <div className="section-label"><span>SCENE</span><h3>场景卡</h3><p>镜头所属场景可在下方切换</p></div>
-            <div className="scene-grid">
-              {storyboard.scenes.map((scene) => (
-                <article className="scene-card editable-card" key={scene.id}>
-                  <span className="scene-index">{scene.id.toUpperCase()}</span>
-                  <div className="card-edit-fields">
-                    <input aria-label={`${scene.id}场景名称`} value={scene.name} onChange={(event) => updateScene(scene.id, "name", event.target.value)} />
-                    <textarea aria-label={`${scene.id}场景设定`} value={scene.description} onChange={(event) => updateScene(scene.id, "description", event.target.value)} />
-                  </div>
-                </article>
-              ))}
+            <div className="asset-section scene-section">
+              <div className="section-label"><span>SCENE</span><h3>场景设定</h3><p>空间变化只影响关联镜头</p></div>
+              <div className="scene-grid">
+                {storyboard.scenes.map((scene) => (
+                  <article className="scene-card editable-card" key={scene.id}>
+                    <span className="scene-index">{scene.id.toUpperCase()}</span>
+                    <div className="card-edit-fields">
+                      <input aria-label={`${scene.id}场景名称`} value={scene.name} onChange={(event) => updateScene(scene.id, "name", event.target.value)} />
+                      <textarea aria-label={`${scene.id}场景设定`} value={scene.description} onChange={(event) => updateScene(scene.id, "description", event.target.value)} />
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
           </div>
 
           <div className="asset-section storyboard-section">
-            <div className="section-label"><span>SHOTS</span><h3>6 镜头故事板</h3><p>可调整顺序、编辑资产并复制单条提示词</p></div>
+            <div className="section-label shot-section-label"><span>SHOTS</span><h3>6 镜头故事板</h3><p>选择镜头 → 调整画面 → 确认提示词 → 导出</p></div>
             <div className="shot-navigator" aria-label="镜头导航">
-              <div className="shot-tabs" role="tablist" aria-label="选择镜头">
+              <div className="shot-tabs" role="group" aria-label="选择镜头">
                 {storyboard.shots.map((shot, index) => {
                   const state = promptState(shot);
-                  return <button key={shot.id} type="button" role="tab" aria-selected={index === activeShotIndex} className={index === activeShotIndex ? "active" : ""} onClick={() => focusShot(index)}>
-                    <span>{String(index + 1).padStart(2, "0")}</span><small className={state.className}>{shot.videoPromptNeedsRebuild ? "待处理" : "已同步"}</small>
+                  return <button key={shot.id} type="button" aria-pressed={index === activeShotIndex} className={index === activeShotIndex ? "active" : ""} onClick={() => focusShot(index)}>
+                    <span><i className={state.className} />{String(index + 1).padStart(2, "0")}</span><small>{shot.framing}</small><em>{shot.videoPromptNeedsRebuild ? "待处理" : "已同步"}</em>
                   </button>;
                 })}
               </div>
@@ -902,16 +959,17 @@ export default function Home() {
                       <span>SHOT {String(index + 1).padStart(2, "0")}</span>
                       <div><button type="button" aria-label={`镜头 ${index + 1} 上移`} disabled={index === 0} onClick={() => moveShot(index, -1)}>↑</button><button type="button" aria-label={`镜头 ${index + 1} 下移`} disabled={index === storyboard.shots.length - 1} onClick={() => moveShot(index, 1)}>↓</button></div>
                     </div>
-                    <p>{shot.visual}</p>
+                    <div className="preview-caption"><span>{scene?.name ?? shot.sceneId} · {shot.framing}</span><p>{shot.visual}</p></div>
                   </div>
                   <div className="shot-fields">
+                    <div className="shot-fields-heading"><div><small>ACTIVE SHOT</small><strong>镜头 {String(index + 1).padStart(2, "0")}</strong></div><em className={`prompt-state ${state.className}`}>{state.label}</em></div>
                     <label><span>场景</span><select aria-label={`镜头 ${index + 1} 场景`} value={shot.sceneId} onChange={(event) => updateShot(shot.id, "sceneId", event.target.value)}>{storyboard.scenes.map((sceneOption) => <option key={sceneOption.id} value={sceneOption.id}>{sceneOption.name}</option>)}</select></label>
                     <label><span>景别</span><select aria-label={`镜头 ${index + 1} 景别`} value={shot.framing} onChange={(event) => updateShot(shot.id, "framing", event.target.value as Shot["framing"])}>{FRAMING_OPTIONS.map((option) => <option key={option}>{option}</option>)}</select></label>
                     <label><span>动作</span><textarea aria-label={`镜头 ${index + 1} 动作`} value={shot.action} onChange={(event) => updateShot(shot.id, "action", event.target.value)} /></label>
                     <label><span>情绪</span><input aria-label={`镜头 ${index + 1} 情绪`} value={shot.emotion} onChange={(event) => updateShot(shot.id, "emotion", event.target.value)} /></label>
                     <label><span>视觉</span><textarea aria-label={`镜头 ${index + 1} 视觉`} value={shot.visual} onChange={(event) => updateShot(shot.id, "visual", event.target.value)} /></label>
                     <label className="video-prompt-field">
-                      <span><span>图生视频提示词 <em className={`prompt-state ${state.className}`}>{state.label}</em></span><span className="prompt-buttons"><button type="button" onClick={() => rebuildSinglePrompt(shot, index + 1)}>重建此条</button><button type="button" onClick={() => void copyVideoPrompt(shot.videoPrompt, index + 1)}>复制</button></span></span>
+                      <span><span>图生视频提示词</span><span className="prompt-buttons"><button type="button" onClick={() => rebuildSinglePrompt(shot, index + 1)}>重建此条</button><button type="button" onClick={() => void copyVideoPrompt(shot.videoPrompt, index + 1)}>复制</button></span></span>
                       <small className="prompt-context">关联场景：{scene?.name ?? shot.sceneId} · 角色设定：{storyboard.characters.map((character) => character.name).join("、")}</small>
                       <textarea aria-label={`镜头 ${index + 1} 图生视频提示词`} value={shot.videoPrompt} onChange={(event) => updateShot(shot.id, "videoPrompt", event.target.value)} />
                     </label>
