@@ -933,10 +933,10 @@ export default function Home() {
           <div className="asset-section storyboard-section">
             <div className="section-label shot-section-label"><span>SHOTS</span><h3>6 镜头故事板</h3><p>选择镜头 → 调整画面 → 确认提示词 → 导出</p></div>
             <div className="shot-navigator" aria-label="镜头导航">
-              <div className="shot-tabs" role="tablist" aria-label="选择镜头">
+              <div className="shot-tabs" role="group" aria-label="选择镜头">
                 {storyboard.shots.map((shot, index) => {
                   const state = promptState(shot);
-                  return <button key={shot.id} type="button" role="tab" aria-selected={index === activeShotIndex} className={index === activeShotIndex ? "active" : ""} onClick={() => focusShot(index)}>
+                  return <button key={shot.id} type="button" aria-pressed={index === activeShotIndex} className={index === activeShotIndex ? "active" : ""} onClick={() => focusShot(index)}>
                     <span><i className={state.className} />{String(index + 1).padStart(2, "0")}</span><small>{shot.framing}</small><em>{shot.videoPromptNeedsRebuild ? "待处理" : "已同步"}</em>
                   </button>;
                 })}
