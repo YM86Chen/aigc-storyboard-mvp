@@ -15,21 +15,33 @@ import type { CloudProject } from "@/lib/cloud-projects";
 import {
   FRAMING_OPTIONS,
   SAMPLE_SCRIPT,
+  createAllVideoPromptsText,
   createStoryboardMarkdown,
+  markVideoPromptsStale,
   moveStoryboardShot,
+  rebuildVideoPrompt,
   rebuildVideoPrompts,
+  setManualVideoPrompt,
   validateStoryboard,
   type Character,
   type Scene,
   type Shot,
   type Storyboard,
 } from "@/lib/storyboard";
+import { MAX_SCRIPT_LENGTH } from "@/lib/generation-service";
+import { createSingleFlight } from "@/lib/single-flight";
 
 function errorMessageFrom(payload: unknown) {
   if (payload && typeof payload === "object" && typeof (payload as { error?: unknown }).error === "string") {
     return (payload as { error: string }).error;
   }
   return "生成失败，请稍后重试。";
+}
+
+function safeClientError(error: unknown, fallback: string) {
+  return error instanceof Error && error.name !== "TypeError" && error.message.trim()
+    ? error.message
+    : fallback;
 }
 
 function initialLibrary(): ProjectLibrary {
@@ -114,6 +126,17 @@ function downloadText(filename: string, text: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
+function promptState(shot: Shot) {
+  if (shot.videoPromptSource === "manual") {
+    return shot.videoPromptNeedsRebuild
+      ? { label: "待检查 · 手动保护", className: "prompt-manual-stale" }
+      : { label: "手动编辑 · 已保护", className: "prompt-manual" };
+  }
+  return shot.videoPromptNeedsRebuild
+    ? { label: "待重建", className: "prompt-stale" }
+    : { label: "提示词已同步", className: "prompt-current" };
+}
+
 export default function Home() {
   const [library, setLibrary] = useState<ProjectLibrary | null>(null);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -133,16 +156,20 @@ export default function Home() {
   const [saveStatus, setSaveStatus] = useState("正在确认登录状态…");
   const [isGenerating, setIsGenerating] = useState(false);
   const [hasExported, setHasExported] = useState(false);
+  const [activeShotIndex, setActiveShotIndex] = useState(0);
   const importInputRef = useRef<HTMLInputElement>(null);
   const editRevisionRef = useRef<Record<string, number>>({});
   const saveBlockedRef = useRef(false);
   const saveInFlightRef = useRef(false);
+  const generationFlightRef = useRef(createSingleFlight());
 
   const activeProject = useMemo(() => {
     return library?.projects.find((project) => project.id === library.activeProjectId) ?? null;
   }, [library]);
   const storyboard = activeProject?.storyboard ?? null;
   const script = activeProject?.script ?? "";
+  const staleGeneratedPromptCount = storyboard?.shots.filter((shot) => shot.videoPromptNeedsRebuild && shot.videoPromptSource === "generated").length ?? 0;
+  const staleManualPromptCount = storyboard?.shots.filter((shot) => shot.videoPromptNeedsRebuild && shot.videoPromptSource === "manual").length ?? 0;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -297,7 +324,7 @@ export default function Home() {
           setLibrary((current) => current ? { ...current, activeProjectId: project.id } : current);
           setCloudIssue("failed");
           setSaveStatus("保存失败，当前编辑内容仍保留");
-          setNotice(error instanceof Error ? error.message : "保存失败，请稍后重试。");
+          setNotice(safeClientError(error, "网络连接中断，当前编辑内容仍保留；恢复网络后请重试保存。"));
           setIsError(true);
         } finally {
           saveInFlightRef.current = false;
@@ -391,7 +418,7 @@ export default function Home() {
         showNotice("已新建云端项目。");
       } catch (error) {
         setSaveStatus("创建失败，未修改现有云端项目");
-        showNotice(error instanceof Error ? error.message : "创建云端项目失败。", true);
+        showNotice(safeClientError(error, "网络连接失败，未创建云端项目，请稍后手动重试。"), true);
       }
       return;
     }
@@ -422,7 +449,7 @@ export default function Home() {
         if (!response.ok) throw new Error(errorMessageFrom(await responsePayload(response)));
       } catch (error) {
         setSaveStatus("删除失败，项目仍保留");
-        showNotice(error instanceof Error ? error.message : "删除云端项目失败。", true);
+        showNotice(safeClientError(error, "网络连接失败，云端项目仍保留，请稍后手动重试。"), true);
         return;
       }
     }
@@ -476,7 +503,7 @@ export default function Home() {
       setSaveStatus("已加载云端最新版本");
       showNotice("已加载云端最新版本。");
     } catch (error) {
-      showNotice(error instanceof Error ? error.message : "加载云端项目失败。", true);
+      showNotice(safeClientError(error, "网络连接失败，当前编辑内容仍保留。"), true);
     }
   }
 
@@ -503,7 +530,7 @@ export default function Home() {
       showNotice(`已将 ${migratedCount} 个本地项目复制到云端，本地草稿仍保留。`);
     } catch (error) {
       setSaveStatus("迁移中断，已成功迁移的项目不会重复处理");
-      showNotice(`已迁移 ${migratedCount} 个项目；${error instanceof Error ? error.message : "其余项目迁移失败。"}`, true);
+      showNotice(`已迁移 ${migratedCount} 个项目；${safeClientError(error, "网络连接失败，其余项目未迁移。")}`, true);
     } finally {
       setIsMigrating(false);
     }
@@ -521,6 +548,14 @@ export default function Home() {
     }
     if (!activeProject || script.trim().length < 50) {
       showNotice("脚本太短了，请至少输入 50 个字。", true);
+      return;
+    }
+    if (script.length > MAX_SCRIPT_LENGTH) {
+      showNotice(`脚本过长，请控制在 ${MAX_SCRIPT_LENGTH} 个字以内。`, true);
+      return;
+    }
+    if (!generationFlightRef.current.tryStart()) {
+      showNotice("故事板正在生成，请等待本次请求完成。", true);
       return;
     }
 
@@ -544,17 +579,19 @@ export default function Home() {
         script: validation.value.sourceScript,
         storyboard: validation.value,
       }));
+      setActiveShotIndex(0);
       showNotice("分镜已生成并开始自动保存，你可继续编辑全部资产。");
       window.setTimeout(() => document.querySelector("#storyboard")?.scrollIntoView({ behavior: "smooth" }), 80);
     } catch (error) {
-      showNotice(error instanceof Error ? error.message : "生成失败，请稍后重试。", true);
+      showNotice(safeClientError(error, "网络连接失败，本次生成未完成；确认网络后可手动重试。"), true);
     } finally {
+      generationFlightRef.current.finish();
       setIsGenerating(false);
     }
   }
 
   function updateCharacter(id: string, field: keyof Pick<Character, "name" | "role" | "description">, value: string) {
-    updateStoryboard((current) => ({
+    updateStoryboard((current) => markVideoPromptsStale({
       ...current,
       characters: current.characters.map((character) => character.id === id
         ? { ...character, [field]: value, ...(field === "name" && value.trim() ? { avatarLabel: value.trim().slice(0, 2) } : {}) }
@@ -563,22 +600,36 @@ export default function Home() {
   }
 
   function updateScene(id: string, field: keyof Pick<Scene, "name" | "description">, value: string) {
-    updateStoryboard((current) => ({
+    updateStoryboard((current) => markVideoPromptsStale({
       ...current,
       scenes: current.scenes.map((scene) => scene.id === id ? { ...scene, [field]: value } : scene),
-    }));
+    }, (shot) => shot.sceneId === id));
   }
 
   function updateShot<K extends keyof Pick<Shot, "sceneId" | "framing" | "action" | "emotion" | "visual" | "videoPrompt">>(id: number, field: K, value: Shot[K]) {
-    updateStoryboard((current) => ({
-      ...current,
-      shots: current.shots.map((shot) => shot.id === id ? { ...shot, [field]: value } : shot),
-    }));
+    updateStoryboard((current) => {
+      if (field === "videoPrompt") {
+        return setManualVideoPrompt(current, id, value as string);
+      }
+      const updated = {
+        ...current,
+        shots: current.shots.map((shot) => shot.id === id ? { ...shot, [field]: value } : shot),
+      };
+      return markVideoPromptsStale(updated, (shot) => shot.id === id);
+    });
   }
 
   function moveShot(index: number, direction: -1 | 1) {
     updateStoryboard((current) => moveStoryboardShot(current, index, direction));
+    setActiveShotIndex(index + direction);
     showNotice("镜头顺序已调整，现有提示词保持不变。");
+  }
+
+  function focusShot(index: number) {
+    if (!storyboard) return;
+    const nextIndex = Math.max(0, Math.min(index, storyboard.shots.length - 1));
+    setActiveShotIndex(nextIndex);
+    window.setTimeout(() => document.querySelector("#shot-editor")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
   }
 
   async function copyVideoPrompt(prompt: string, shotNumber: number) {
@@ -590,6 +641,16 @@ export default function Home() {
     }
   }
 
+  async function copyAllVideoPrompts() {
+    if (!storyboard) return;
+    try {
+      await navigator.clipboard.writeText(createAllVideoPromptsText(storyboard));
+      showNotice("6 条图生视频提示词已整套复制，并包含场景与角色关联。");
+    } catch {
+      showNotice("整套复制失败，请使用 Markdown 导出或逐条复制。", true);
+    }
+  }
+
   function rebuildPrompts() {
     if (!storyboard) return;
     const validation = validateStoryboard(storyboard);
@@ -597,9 +658,25 @@ export default function Home() {
       showNotice(`无法重建提示词：${validation.error}`, true);
       return;
     }
-    if (!window.confirm("按当前角色、场景和镜头重建 6 条提示词吗？这会覆盖你手动编辑过的全部提示词。")) return;
+    if (staleGeneratedPromptCount === 0) {
+      showNotice(staleManualPromptCount > 0
+        ? `${staleManualPromptCount} 条待检查提示词为手动编辑状态，请在对应镜头中逐条确认重建。`
+        : "当前 6 条提示词都已与资产同步，无需重建。");
+      return;
+    }
+    const protectedMessage = staleManualPromptCount > 0
+      ? `；另有 ${staleManualPromptCount} 条手动提示词会继续保留，不会被覆盖`
+      : "";
+    if (!window.confirm(`将按当前资产重建 ${staleGeneratedPromptCount} 条待更新提示词${protectedMessage}。确定继续吗？`)) return;
     updateStoryboard((current) => rebuildVideoPrompts(current));
-    showNotice("已按当前资产重建 6 条图生视频提示词。");
+    showNotice(`已按当前资产重建 ${staleGeneratedPromptCount} 条图生视频提示词，手动提示词未被覆盖。`);
+  }
+
+  function rebuildSinglePrompt(shot: Shot, shotNumber: number) {
+    if (shot.videoPromptSource === "manual"
+      && !window.confirm(`镜头 ${shotNumber} 是手动编辑提示词。确定按当前资产替换这一条吗？`)) return;
+    updateStoryboard((current) => rebuildVideoPrompt(current, shot.id));
+    showNotice(`镜头 ${shotNumber} 的提示词已按当前资产重建。`);
   }
 
   function exportMarkdown() {
@@ -678,6 +755,7 @@ export default function Home() {
           <label htmlFor="project-select">{session.status === "authenticated" ? "云端项目" : "当前项目"}</label>
           <select id="project-select" value={library?.activeProjectId ?? ""} disabled={!library || library.projects.length === 0} onChange={(event) => {
             setLibrary((current) => current ? { ...current, activeProjectId: event.target.value } : current);
+            setActiveShotIndex(0);
             showNotice(session.status === "authenticated" ? "已切换云端项目。" : "已切换本地项目。");
           }}>
             {library?.projects.length === 0 && <option value="">暂无云端项目</option>}
@@ -729,7 +807,7 @@ export default function Home() {
         </div>
         <div className="editor-wrap">
           <textarea aria-label="短剧脚本" value={script} disabled={!activeProject} onChange={(event) => updateScript(event.target.value)} placeholder={isHydrated ? "在这里粘贴你的故事…" : "正在恢复本地项目…"} />
-          <span className="counter">{script.length} 字</span>
+          <span className={`counter ${script.length > MAX_SCRIPT_LENGTH ? "over-limit" : ""}`}>{script.length} / {MAX_SCRIPT_LENGTH} 字</span>
         </div>
         <div className="workspace-foot">
           <div className="notice-stack">
@@ -752,9 +830,16 @@ export default function Home() {
             </div>
             <div className="result-actions">
               <span className="result-count">{storyboard.characters.length} 角色 · {storyboard.scenes.length} 场景 · {storyboard.shots.length} 镜头</span>
-              <button className="secondary-action" type="button" onClick={rebuildPrompts}>按当前资产重建提示词</button>
+              <button className="secondary-action" type="button" onClick={() => void copyAllVideoPrompts()}>复制整套提示词</button>
+              <button className="secondary-action" type="button" onClick={rebuildPrompts} disabled={staleGeneratedPromptCount === 0 && staleManualPromptCount === 0}>
+                {staleGeneratedPromptCount > 0 ? `重建 ${staleGeneratedPromptCount} 条待更新提示词` : "按当前资产重建提示词"}
+              </button>
               <button className="export-button" type="button" onClick={exportMarkdown}>{hasExported ? "已导出 Markdown ✓" : "导出 Markdown ↓"}</button>
             </div>
+          </div>
+          <div className="prompt-summary" aria-live="polite">
+            <strong>{staleGeneratedPromptCount + staleManualPromptCount === 0 ? "提示词已全部同步" : `${staleGeneratedPromptCount + staleManualPromptCount} 条提示词需要处理`}</strong>
+            <span>{staleGeneratedPromptCount > 0 ? `${staleGeneratedPromptCount} 条可批量重建` : "没有待批量重建项"}{staleManualPromptCount > 0 ? ` · ${staleManualPromptCount} 条手动提示词受保护，需逐条确认` : " · 手动提示词不会被静默覆盖"}</span>
           </div>
 
           <div className="asset-section">
@@ -790,9 +875,28 @@ export default function Home() {
 
           <div className="asset-section storyboard-section">
             <div className="section-label"><span>SHOTS</span><h3>6 镜头故事板</h3><p>可调整顺序、编辑资产并复制单条提示词</p></div>
-            <div className="shot-grid">
-              {storyboard.shots.map((shot, index) => (
-                <article className="shot-card" key={shot.id}>
+            <div className="shot-navigator" aria-label="镜头导航">
+              <div className="shot-tabs" role="tablist" aria-label="选择镜头">
+                {storyboard.shots.map((shot, index) => {
+                  const state = promptState(shot);
+                  return <button key={shot.id} type="button" role="tab" aria-selected={index === activeShotIndex} className={index === activeShotIndex ? "active" : ""} onClick={() => focusShot(index)}>
+                    <span>{String(index + 1).padStart(2, "0")}</span><small className={state.className}>{shot.videoPromptNeedsRebuild ? "待处理" : "已同步"}</small>
+                  </button>;
+                })}
+              </div>
+              <div className="shot-step-actions">
+                <button type="button" onClick={() => focusShot(activeShotIndex - 1)} disabled={activeShotIndex === 0}>← 上一个</button>
+                <span>当前镜头 {activeShotIndex + 1} / {storyboard.shots.length}</span>
+                <button type="button" onClick={() => focusShot(activeShotIndex + 1)} disabled={activeShotIndex === storyboard.shots.length - 1}>下一个 →</button>
+              </div>
+            </div>
+            <div className="shot-grid focused-shot-grid" id="shot-editor">
+              {storyboard.shots.filter((_, index) => index === activeShotIndex).map((shot) => {
+                const index = activeShotIndex;
+                const scene = storyboard.scenes.find((candidate) => candidate.id === shot.sceneId);
+                const state = promptState(shot);
+                return (
+                <article className="shot-card active-shot" key={shot.id} aria-label={`镜头 ${index + 1} 编辑器`}>
                   <div className={`shot-preview preview-${(index % 6) + 1}`}>
                     <div className="shot-toolbar">
                       <span>SHOT {String(index + 1).padStart(2, "0")}</span>
@@ -801,15 +905,19 @@ export default function Home() {
                     <p>{shot.visual}</p>
                   </div>
                   <div className="shot-fields">
-                    <label><span>场景</span><select value={shot.sceneId} onChange={(event) => updateShot(shot.id, "sceneId", event.target.value)}>{storyboard.scenes.map((scene) => <option key={scene.id} value={scene.id}>{scene.name}</option>)}</select></label>
-                    <label><span>景别</span><select value={shot.framing} onChange={(event) => updateShot(shot.id, "framing", event.target.value as Shot["framing"])}>{FRAMING_OPTIONS.map((option) => <option key={option}>{option}</option>)}</select></label>
-                    <label><span>动作</span><textarea value={shot.action} onChange={(event) => updateShot(shot.id, "action", event.target.value)} /></label>
-                    <label><span>情绪</span><input value={shot.emotion} onChange={(event) => updateShot(shot.id, "emotion", event.target.value)} /></label>
-                    <label><span>视觉</span><textarea value={shot.visual} onChange={(event) => updateShot(shot.id, "visual", event.target.value)} /></label>
-                    <label className="video-prompt-field"><span>图生视频提示词 <button type="button" onClick={() => void copyVideoPrompt(shot.videoPrompt, index + 1)}>复制</button></span><textarea value={shot.videoPrompt} onChange={(event) => updateShot(shot.id, "videoPrompt", event.target.value)} /></label>
+                    <label><span>场景</span><select aria-label={`镜头 ${index + 1} 场景`} value={shot.sceneId} onChange={(event) => updateShot(shot.id, "sceneId", event.target.value)}>{storyboard.scenes.map((sceneOption) => <option key={sceneOption.id} value={sceneOption.id}>{sceneOption.name}</option>)}</select></label>
+                    <label><span>景别</span><select aria-label={`镜头 ${index + 1} 景别`} value={shot.framing} onChange={(event) => updateShot(shot.id, "framing", event.target.value as Shot["framing"])}>{FRAMING_OPTIONS.map((option) => <option key={option}>{option}</option>)}</select></label>
+                    <label><span>动作</span><textarea aria-label={`镜头 ${index + 1} 动作`} value={shot.action} onChange={(event) => updateShot(shot.id, "action", event.target.value)} /></label>
+                    <label><span>情绪</span><input aria-label={`镜头 ${index + 1} 情绪`} value={shot.emotion} onChange={(event) => updateShot(shot.id, "emotion", event.target.value)} /></label>
+                    <label><span>视觉</span><textarea aria-label={`镜头 ${index + 1} 视觉`} value={shot.visual} onChange={(event) => updateShot(shot.id, "visual", event.target.value)} /></label>
+                    <label className="video-prompt-field">
+                      <span><span>图生视频提示词 <em className={`prompt-state ${state.className}`}>{state.label}</em></span><span className="prompt-buttons"><button type="button" onClick={() => rebuildSinglePrompt(shot, index + 1)}>重建此条</button><button type="button" onClick={() => void copyVideoPrompt(shot.videoPrompt, index + 1)}>复制</button></span></span>
+                      <small className="prompt-context">关联场景：{scene?.name ?? shot.sceneId} · 角色设定：{storyboard.characters.map((character) => character.name).join("、")}</small>
+                      <textarea aria-label={`镜头 ${index + 1} 图生视频提示词`} value={shot.videoPrompt} onChange={(event) => updateShot(shot.id, "videoPrompt", event.target.value)} />
+                    </label>
                   </div>
                 </article>
-              ))}
+              );})}
             </div>
           </div>
         </section>

@@ -1,6 +1,7 @@
 export const FRAMING_OPTIONS = ["远景", "全景", "中景", "近景", "特写", "大特写"] as const;
 
 export type ShotFraming = (typeof FRAMING_OPTIONS)[number];
+export type VideoPromptSource = "generated" | "manual";
 
 export interface Character {
   id: string;
@@ -25,6 +26,8 @@ export interface Shot {
   emotion: string;
   visual: string;
   videoPrompt: string;
+  videoPromptSource: VideoPromptSource;
+  videoPromptNeedsRebuild: boolean;
 }
 
 export interface Storyboard {
@@ -35,7 +38,7 @@ export interface Storyboard {
   shots: Shot[];
 }
 
-export type GeneratedShot = Omit<Shot, "videoPrompt">;
+export type GeneratedShot = Omit<Shot, "videoPrompt" | "videoPromptSource" | "videoPromptNeedsRebuild">;
 
 export type GeneratedStoryboard = Omit<Storyboard, "sourceScript" | "shots"> & {
   shots: GeneratedShot[];
@@ -169,7 +172,24 @@ export function validateStoryboard(value: unknown): SavedStoryboardValidationRes
     return { ok: false, error: `第 ${invalidPromptIndex + 1} 个镜头缺少图生视频提示词。` };
   }
 
-  return { ok: true, value: value as unknown as Storyboard };
+  const normalizedShots = generatedValidation.value.shots.map((shot, index) => {
+    const savedShot = value.shots[index] as Record<string, unknown>;
+    return {
+      ...shot,
+      videoPrompt: savedShot.videoPrompt as string,
+      videoPromptSource: savedShot.videoPromptSource === "manual" ? "manual" as const : "generated" as const,
+      videoPromptNeedsRebuild: savedShot.videoPromptNeedsRebuild === true,
+    };
+  });
+
+  return {
+    ok: true,
+    value: {
+      ...generatedValidation.value,
+      sourceScript: value.sourceScript,
+      shots: normalizedShots,
+    },
+  };
 }
 
 export function isStoryboard(value: unknown): value is Storyboard {
@@ -200,12 +220,43 @@ export function createStoryboardWithVideoPrompts(
     shots: storyboard.shots.map((shot) => ({
       ...shot,
       videoPrompt: videoPromptForShot(shot, scenesById.get(shot.sceneId)!, storyboard.characters),
+      videoPromptSource: "generated",
+      videoPromptNeedsRebuild: false,
     })),
   };
 }
 
-export function rebuildVideoPrompts(storyboard: Storyboard): Storyboard {
+export function markVideoPromptsStale(
+  storyboard: Storyboard,
+  affectsShot: (shot: Shot) => boolean = () => true,
+): Storyboard {
+  return {
+    ...storyboard,
+    shots: storyboard.shots.map((shot) => affectsShot(shot)
+      ? { ...shot, videoPromptNeedsRebuild: true }
+      : { ...shot }),
+  };
+}
+
+export function setManualVideoPrompt(storyboard: Storyboard, shotId: number, videoPrompt: string): Storyboard {
+  return {
+    ...storyboard,
+    shots: storyboard.shots.map((shot) => shot.id === shotId ? {
+      ...shot,
+      videoPrompt,
+      videoPromptSource: "manual",
+      videoPromptNeedsRebuild: false,
+    } : { ...shot }),
+  };
+}
+
+export function rebuildVideoPrompts(
+  storyboard: Storyboard,
+  options: { includeManual?: boolean; onlyStale?: boolean } = {},
+): Storyboard {
   const scenesById = new Map(storyboard.scenes.map((scene) => [scene.id, scene]));
+  const includeManual = options.includeManual === true;
+  const onlyStale = options.onlyStale !== false;
 
   return {
     ...storyboard,
@@ -213,8 +264,25 @@ export function rebuildVideoPrompts(storyboard: Storyboard): Storyboard {
     scenes: storyboard.scenes.map((scene) => ({ ...scene })),
     shots: storyboard.shots.map((shot) => ({
       ...shot,
-      videoPrompt: videoPromptForShot(shot, scenesById.get(shot.sceneId)!, storyboard.characters),
+      ...((!onlyStale || shot.videoPromptNeedsRebuild) && (includeManual || shot.videoPromptSource !== "manual") ? {
+        videoPrompt: videoPromptForShot(shot, scenesById.get(shot.sceneId)!, storyboard.characters),
+        videoPromptSource: "generated" as const,
+        videoPromptNeedsRebuild: false,
+      } : {}),
     })),
+  };
+}
+
+export function rebuildVideoPrompt(storyboard: Storyboard, shotId: number): Storyboard {
+  const scenesById = new Map(storyboard.scenes.map((scene) => [scene.id, scene]));
+  return {
+    ...storyboard,
+    shots: storyboard.shots.map((shot) => shot.id === shotId ? {
+      ...shot,
+      videoPrompt: videoPromptForShot(shot, scenesById.get(shot.sceneId)!, storyboard.characters),
+      videoPromptSource: "generated",
+      videoPromptNeedsRebuild: false,
+    } : { ...shot }),
   };
 }
 
@@ -273,6 +341,15 @@ ${shotMarkdown}
 
 生成时间：${generatedAt}
 `;
+}
+
+export function createAllVideoPromptsText(storyboard: Storyboard) {
+  const scenesById = new Map(storyboard.scenes.map((scene) => [scene.id, scene]));
+  const characters = storyboard.characters.map((character) => `${character.name}：${character.description}`).join("；");
+  return storyboard.shots.map((shot, index) => {
+    const scene = scenesById.get(shot.sceneId)!;
+    return `镜头 ${String(index + 1).padStart(2, "0")}｜${scene.name}\n关联角色：${characters}\n\n${shot.videoPrompt}`;
+  }).join("\n\n---\n\n");
 }
 
 export const SAMPLE_SCRIPT = `《最后一班地铁》

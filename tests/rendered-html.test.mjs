@@ -81,13 +81,16 @@ test("cloud project routes reject anonymous requests before touching D1", async 
 });
 
 test("source contains the complete request chain, local workspace, and shared storyboard contract", async () => {
-  const [page, packageJson, storyboard, projects, route, deepseek, envExample, gitignore] = await Promise.all([
+  const [page, packageJson, storyboard, projects, route, deepseek, generationService, generationStore, schema, envExample, gitignore] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../lib/storyboard.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/projects.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/api/generate-storyboard/route.ts", import.meta.url), "utf8"),
     readFile(new URL("../lib/deepseek.ts", import.meta.url), "utf8"),
+    readFile(new URL("../lib/generation-service.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/generation-limits.ts", import.meta.url), "utf8"),
+    readFile(new URL("../db/schema.ts", import.meta.url), "utf8"),
     readFile(new URL("../.env.example", import.meta.url), "utf8"),
     readFile(new URL("../.gitignore", import.meta.url), "utf8"),
   ]);
@@ -99,7 +102,10 @@ test("source contains the complete request chain, local workspace, and shared st
   assert.doesNotMatch(page, /createMockStoryboard/);
   assert.match(page, /fetch\("\/api\/generate-storyboard"/);
   assert.match(page, /isGenerating/);
+  assert.match(page, /generationFlightRef\.current\.tryStart\(\)/);
+  assert.match(page, /generationFlightRef\.current\.finish\(\)/);
   assert.match(page, /生成中…/);
+  assert.match(page, /MAX_SCRIPT_LENGTH/);
   assert.match(page, /isError/);
   assert.match(page, /脚本会发送至你配置的 AI 服务，仅用于本次生成。/);
   assert.match(page, /02 · AI 生成结果/);
@@ -111,7 +117,12 @@ test("source contains the complete request chain, local workspace, and shared st
   assert.match(page, /navigator\.clipboard\.writeText/);
   assert.match(page, /moveStoryboardShot/);
   assert.match(page, /按当前资产重建提示词/);
-  assert.match(page, /window\.confirm\("按当前角色/);
+  assert.match(page, /手动提示词会继续保留，不会被覆盖/);
+  assert.match(page, /待检查 · 手动保护/);
+  assert.match(page, /复制整套提示词/);
+  assert.match(page, /镜头导航/);
+  assert.match(page, /上一个/);
+  assert.match(page, /下一个/);
   assert.match(page, /window\.confirm\(`确定删除/);
   assert.match(page, /saveProjectLibrary\(window\.localStorage/);
   assert.match(page, /loadProjectLibrary\(window\.localStorage/);
@@ -126,6 +137,8 @@ test("source contains the complete request chain, local workspace, and shared st
   assert.match(page, /正在保存到云端/);
   assert.match(page, /已保存到云端/);
   assert.match(page, /保存失败，当前编辑内容仍保留/);
+  assert.match(page, /网络连接中断，当前编辑内容仍保留；恢复网络后请重试保存。/);
+  assert.match(page, /网络连接失败，本次生成未完成；确认网络后可手动重试。/);
   assert.match(page, /存在版本冲突/);
   assert.match(page, /fetch\("\/api\/session"/);
   assert.match(page, /fetch\("\/api\/projects"/);
@@ -148,11 +161,23 @@ test("source contains the complete request chain, local workspace, and shared st
   assert.match(storyboard, /export function createStoryboardMarkdown/);
   assert.match(storyboard, /export function validateStoryboard/);
   assert.match(storyboard, /export function rebuildVideoPrompts/);
+  assert.match(storyboard, /export function markVideoPromptsStale/);
+  assert.match(storyboard, /export function setManualVideoPrompt/);
+  assert.match(storyboard, /export function createAllVideoPromptsText/);
   assert.match(storyboard, /export function moveStoryboardShot/);
   assert.match(storyboard, /const FRAMING_OPTIONS/);
   assert.equal((storyboard.match(/sceneId: "s0[12]"/g) ?? []).length, 6);
   assert.match(route, /generateStoryboardWithDeepSeek/);
+  assert.match(route, /generateStoryboardResponse/);
   assert.doesNotMatch(route, /createMockStoryboard/);
+  assert.match(generationService, /MAX_SCRIPT_LENGTH = 6_000/);
+  assert.match(generationService, /GENERATION_COOLDOWN_MS = 60_000/);
+  assert.match(generationService, /已有故事板正在生成/);
+  assert.match(generationService, /生成操作过于频繁/);
+  assert.match(generationStore, /ON CONFLICT\(owner_id\) DO UPDATE/);
+  assert.match(generationStore, /generation_limits\.lease_expires_at <= \?/);
+  assert.match(generationStore, /WHERE owner_id = \? AND request_id = \?/);
+  assert.match(schema, /generation_limits/);
   assert.match(deepseek, /https:\/\/api\.deepseek\.com\/chat\/completions/);
   assert.match(deepseek, /model: "deepseek-v4-pro"/);
   assert.match(deepseek, /response_format: \{ type: "json_object" \}/);
