@@ -12,3 +12,10 @@ export const projects = sqliteTable("projects", {
 }, (table) => [
   index("idx_projects_owner_updated").on(table.ownerId, table.updatedAt),
 ]);
+
+export const generationLimits = sqliteTable("generation_limits", {
+  ownerId: text("owner_id").primaryKey(),
+  requestId: text("request_id").notNull(),
+  lastStartedAt: integer("last_started_at").notNull(),
+  leaseExpiresAt: integer("lease_expires_at").notNull(),
+});

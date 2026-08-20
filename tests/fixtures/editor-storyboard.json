@@ -1,0 +1,32 @@
+{
+  "format": "zhenyu-storyboard-project",
+  "version": 1,
+  "exportedAt": "2026-08-20T08:00:00.000Z",
+  "project": {
+    "id": "browser-editor-fixture",
+    "name": "编辑闭环浏览器验收",
+    "script": "《雨夜书店》雨夜里，年轻店员准备关闭旧书店，一名旅人带来一本没有结局的日记。两人沿着书页留下的线索寻找失踪作者，最终在阁楼发现一封写给未来读者的信。",
+    "storyboard": {
+      "title": "雨夜书店",
+      "sourceScript": "《雨夜书店》雨夜里，年轻店员准备关闭旧书店，一名旅人带来一本没有结局的日记。两人沿着书页留下的线索寻找失踪作者，最终在阁楼发现一封写给未来读者的信。",
+      "characters": [
+        { "id": "clerk", "name": "店员", "role": "主角", "description": "短发，墨绿围裙，手持铜制钥匙", "avatarLabel": "店", "avatarTone": "orange" },
+        { "id": "traveler", "name": "旅人", "role": "访客", "description": "深灰风衣，旧皮箱，神情沉静", "avatarLabel": "旅", "avatarTone": "dark" }
+      ],
+      "scenes": [
+        { "id": "s01", "name": "旧书店", "description": "雨夜，暖黄台灯，木质书架与起雾橱窗" },
+        { "id": "s02", "name": "书店阁楼", "description": "低矮屋顶，灰尘漂浮，旧纸箱堆叠" }
+      ],
+      "shots": [
+        { "id": 1, "sceneId": "s01", "framing": "全景", "action": "店员走向门口准备关灯", "emotion": "疲惫", "visual": "雨水划过橱窗，暖光照亮书架", "videoPrompt": "镜头景别：全景\n画面动作：店员走向门口准备关灯\n情绪氛围：疲惫\n画面视觉：雨水划过橱窗，暖光照亮书架\n场景设定：旧书店，雨夜，暖黄台灯，木质书架与起雾橱窗\n角色一致性：店员：短发，墨绿围裙，手持铜制钥匙；旅人：深灰风衣，旧皮箱，神情沉静", "videoPromptSource": "generated", "videoPromptNeedsRebuild": false },
+        { "id": 2, "sceneId": "s01", "framing": "中景", "action": "旅人推门进入并放下旧皮箱", "emotion": "克制", "visual": "门铃轻响，冷雨与室内暖光交汇", "videoPrompt": "镜头景别：中景\n画面动作：旅人推门进入并放下旧皮箱\n情绪氛围：克制\n画面视觉：门铃轻响，冷雨与室内暖光交汇\n场景设定：旧书店，雨夜，暖黄台灯，木质书架与起雾橱窗\n角色一致性：店员：短发，墨绿围裙，手持铜制钥匙；旅人：深灰风衣，旧皮箱，神情沉静", "videoPromptSource": "generated", "videoPromptNeedsRebuild": false },
+        { "id": 3, "sceneId": "s01", "framing": "特写", "action": "旅人翻开没有结局的日记", "emotion": "期待", "visual": "泛黄纸页停在未写完的句子", "videoPrompt": "镜头景别：特写\n画面动作：旅人翻开没有结局的日记\n情绪氛围：期待\n画面视觉：泛黄纸页停在未写完的句子\n场景设定：旧书店，雨夜，暖黄台灯，木质书架与起雾橱窗\n角色一致性：店员：短发，墨绿围裙，手持铜制钥匙；旅人：深灰风衣，旧皮箱，神情沉静", "videoPromptSource": "generated", "videoPromptNeedsRebuild": false },
+        { "id": 4, "sceneId": "s01", "framing": "近景", "action": "店员用钥匙打开隐藏抽屉", "emotion": "好奇", "visual": "铜钥匙转动，抽屉缝隙落下灰尘", "videoPrompt": "镜头景别：近景\n画面动作：店员用钥匙打开隐藏抽屉\n情绪氛围：好奇\n画面视觉：铜钥匙转动，抽屉缝隙落下灰尘\n场景设定：旧书店，雨夜，暖黄台灯，木质书架与起雾橱窗\n角色一致性：店员：短发，墨绿围裙，手持铜制钥匙；旅人：深灰风衣，旧皮箱，神情沉静", "videoPromptSource": "generated", "videoPromptNeedsRebuild": false },
+        { "id": 5, "sceneId": "s02", "framing": "远景", "action": "两人沿窄梯进入阁楼", "emotion": "紧张", "visual": "手电光扫过纸箱与倾斜屋梁", "videoPrompt": "镜头景别：远景\n画面动作：两人沿窄梯进入阁楼\n情绪氛围：紧张\n画面视觉：手电光扫过纸箱与倾斜屋梁\n场景设定：书店阁楼，低矮屋顶，灰尘漂浮，旧纸箱堆叠\n角色一致性：店员：短发，墨绿围裙，手持铜制钥匙；旅人：深灰风衣，旧皮箱，神情沉静", "videoPromptSource": "generated", "videoPromptNeedsRebuild": false },
+        { "id": 6, "sceneId": "s02", "framing": "大特写", "action": "店员展开写给未来读者的信", "emotion": "释然", "visual": "信纸边缘泛光，雨声逐渐平息", "videoPrompt": "镜头景别：大特写\n画面动作：店员展开写给未来读者的信\n情绪氛围：释然\n画面视觉：信纸边缘泛光，雨声逐渐平息\n场景设定：书店阁楼，低矮屋顶，灰尘漂浮，旧纸箱堆叠\n角色一致性：店员：短发，墨绿围裙，手持铜制钥匙；旅人：深灰风衣，旧皮箱，神情沉静", "videoPromptSource": "generated", "videoPromptNeedsRebuild": false }
+      ]
+    },
+    "createdAt": "2026-08-20T08:00:00.000Z",
+    "updatedAt": "2026-08-20T08:00:00.000Z"
+  }
+}

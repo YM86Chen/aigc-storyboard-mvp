@@ -83,7 +83,17 @@ export function validateProjectDraft(value: unknown): ProjectValidationResult<Lo
     return { ok: false, error: "项目脚本与故事板中的原始脚本不一致。" };
   }
 
-  return { ok: true, value: value as unknown as LocalProjectDraft };
+  return {
+    ok: true,
+    value: {
+      id: value.id,
+      name: value.name,
+      script: value.script,
+      storyboard: storyboardValidation.value,
+      createdAt: value.createdAt,
+      updatedAt: value.updatedAt,
+    },
+  };
 }
 
 export function validateProjectLibrary(value: unknown): ProjectValidationResult<ProjectLibrary> {

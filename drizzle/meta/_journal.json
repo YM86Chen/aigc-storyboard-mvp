@@ -8,6 +8,13 @@
       "when": 1787153714601,
       "tag": "0000_red_strong_guy",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787188016761,
+      "tag": "0001_tiny_archangel",
+      "breakpoints": true
     }
   ]
 }
